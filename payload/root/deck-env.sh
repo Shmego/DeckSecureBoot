@@ -37,6 +37,27 @@ sanitize_printable() {
   LC_ALL=C tr -cd '\11\12\15\40-\176'
 }
 
+sbctl_sign_capture() {
+  # Run sbctl sign capturing output/status without tripping set -e on failure.
+  local target="$1"
+  SBCTL_RAW_OUTPUT=""
+  SBCTL_STATUS=0
+
+  # Allow callers to short-circuit gracefully if sbctl is missing.
+  if ! command -v sbctl >/dev/null 2>&1; then
+    SBCTL_STATUS=127
+    SBCTL_RAW_OUTPUT="sbctl not found"
+    return 0
+  fi
+
+  if SBCTL_RAW_OUTPUT=$(sbctl sign -s "$target" 2>&1); then
+    SBCTL_STATUS=0
+  else
+    SBCTL_STATUS=$?
+  fi
+  return 0
+}
+
 secure_boot_enabled() {
   command -v sbctl >/dev/null 2>&1 || return 1
   local sb_line

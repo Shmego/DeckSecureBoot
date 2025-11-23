@@ -163,6 +163,16 @@ collect_base_candidates() {
   done
 }
 
+collect_kernel_candidates() {
+  KERNEL_CANDIDATES=()
+  SEEN_KERNELS=()
+  for dir in "${SEARCH_DIRS[@]}"; do
+    while IFS= read -r -d '' k; do
+      add_unique_file "KERNEL_CANDIDATES" "SEEN_KERNELS" "$ISO_MOUNT" "$k"
+    done < <(run_find_timeout "$dir" 8 -type f -iname 'vmlinuz*' || true)
+  done
+}
+
 select_base_candidate() {
   local count=${#BASE_CANDIDATES[@]}
   if [ "$count" -eq 0 ]; then
@@ -498,6 +508,7 @@ install_jump_loader() {
 
   deck_dialog --msgbox "Boot entry created:\n$output" 8 80
   record_jump_state "$custom_jump"
+  LAST_INSTALLED_JUMP="$custom_jump"
 }
 
 find_installed_jump() {
@@ -577,6 +588,59 @@ remove_jump_loader() {
   return 0
 }
 
+sign_detected_kernels() {
+  if ! command -v sbctl >/dev/null 2>&1; then
+    deck_dialog --msgbox "sbctl is not available in this environment.\nSkipping kernel signing." 9 80
+    return 0
+  fi
+
+  deck_dialog --infobox "Scanning for kernels to sign..." 5 70
+  collect_kernel_candidates
+
+  if [ "${#KERNEL_CANDIDATES[@]}" -eq 0 ]; then
+    deck_dialog --msgbox "No vmlinuz kernels were found to sign." 8 70
+    return 0
+  fi
+
+  local summary="" success=0 already=0 failed=0
+  local kernel display RAW_OUTPUT STATUS OUTPUT
+
+  for kernel in "${KERNEL_CANDIDATES[@]}"; do
+    display=$(display_path "$kernel")
+    if ! ERR=$(ensure_rw_for_path "$kernel"); then
+      summary+="$display: SKIPPED (read-only)\n${ERR:-Unable to access target.}\n\n"
+      failed=$((failed + 1))
+      continue
+    fi
+
+    deck_dialog --infobox "Signing kernel:\n$display" 6 70
+    sbctl_sign_capture "$kernel"
+    STATUS=$SBCTL_STATUS
+    OUTPUT=$(printf '%s' "$SBCTL_RAW_OUTPUT" | sanitize_printable)
+
+    if [ $STATUS -eq 0 ]; then
+      summary+="$display: signed\n"
+      success=$((success + 1))
+    elif printf '%s' "$OUTPUT" | grep -qi 'already been signed'; then
+      summary+="$display: already signed\n"
+      already=$((already + 1))
+    else
+      summary+="$display: FAILED (exit $STATUS)\n$OUTPUT\n\n"
+      failed=$((failed + 1))
+    fi
+  done
+
+  summary=$(printf '%s' "$summary" | sanitize_printable)
+  local heading
+  if [ $failed -eq 0 ]; then
+    heading="Kernel signing summary (signed: $success, already: $already)"
+  else
+    heading="Kernel signing summary (signed: $success, already: $already, failed: $failed)"
+  fi
+
+  deck_dialog --msgbox "$(printf '%s\n\n%s' "$heading" "$summary")" 20 90
+}
+
 main() {
   if [ ! -f "$JUMP_SOURCE" ]; then
     deck_dialog --msgbox "Jump loader $JUMP_SOURCE is missing from the live environment." 10 80
@@ -591,12 +655,16 @@ main() {
   select_grub_for_base "$steamcl_mount_for_pick"
 
   install_jump_loader "$SELECTED_BASE" "$SELECTED_GRUB"
+  if [ -n "$LAST_INSTALLED_JUMP" ]; then
+    sign_detected_kernels
+  fi
 }
 
-declare -a TEMP_MOUNTS=() SEARCH_DIRS=() BASE_CANDIDATES=() GRUB_CANDIDATES=()
-declare -A ADDED_DIRS=() SEEN_BASE=() SEEN_GRUB=()
+declare -a TEMP_MOUNTS=() SEARCH_DIRS=() BASE_CANDIDATES=() GRUB_CANDIDATES=() KERNEL_CANDIDATES=()
+declare -A ADDED_DIRS=() SEEN_BASE=() SEEN_GRUB=() SEEN_KERNELS=()
 SELECTED_BASE=""
 SELECTED_GRUB=""
+LAST_INSTALLED_JUMP=""
 
 trap cleanup EXIT
 if [ "${1:-}" = "--detect-installed" ]; then

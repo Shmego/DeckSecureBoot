@@ -103,9 +103,9 @@ sign_clover_bundle() {
   for file in "${files[@]}"; do
     display=$(display_path "$file")
     deck_dialog --infobox "Signing Clover EFI:\n$display" 6 70
-    RAW_OUTPUT=$(sbctl sign -s "$file" 2>&1)
-    STATUS=$?
-    OUTPUT=$(printf '%s' "$RAW_OUTPUT" | sanitize_printable)
+    sbctl_sign_capture "$file"
+    STATUS=$SBCTL_STATUS
+    OUTPUT=$(printf '%s' "$SBCTL_RAW_OUTPUT" | sanitize_printable)
     if [ $STATUS -eq 0 ]; then
       summary+="$display: signed\n"
       success=$((success + 1))
@@ -225,7 +225,9 @@ while true; do
   TARGET_KEY="${PICK_TARGETS[$((CHOICE-1))]}"
 
   if [ "$TARGET_KEY" = "$CLOVER_BUNDLE_KEY" ]; then
-    sign_clover_bundle "${CLOVER_FILES[@]}"
+    if ! sign_clover_bundle "${CLOVER_FILES[@]}"; then
+      continue
+    fi
     continue
   fi
 
@@ -242,9 +244,9 @@ while true; do
   fi
 
   deck_dialog --infobox "Signing:\n$TARGET" 6 70
-  RAW_OUTPUT=$(sbctl sign -s "$TARGET" 2>&1)
-  STATUS=$?
-  OUTPUT=$(printf '%s' "$RAW_OUTPUT" | sanitize_printable)
+  sbctl_sign_capture "$TARGET"
+  STATUS=$SBCTL_STATUS
+  OUTPUT=$(printf '%s' "$SBCTL_RAW_OUTPUT" | sanitize_printable)
 
   if [ $STATUS -eq 0 ]; then
     deck_message_box "Signing succeeded" "$OUTPUT"
