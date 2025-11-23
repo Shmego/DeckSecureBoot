@@ -9,6 +9,7 @@ OLD_EFI_LABEL="$DECK_SB_OLD_EFI_LABEL"  # legacy label to clean up
 NEW_EFI_LABEL="$DECK_SB_NEW_EFI_LABEL"
 DECK_SB_FILES_DIR="/root/deck-sb-files"
 JUMP_SOURCE="$DECK_SB_FILES_DIR/steamos-jump.signed.efi"
+PNG_SOURCE="$DECK_SB_FILES_DIR/deckpink.png"
 CLOVER_ENTRY_TEMPLATE="$DECK_SB_FILES_DIR/clover-jump-entry.plist"
 DECK_SB_CFG_TEMPLATE="$DECK_SB_FILES_DIR/deck-sb.cfg.tmpl"
 DEFAULT_KERNEL_IMAGE="/boot/vmlinuz-linux-neptune-611"
@@ -459,6 +460,7 @@ install_jump_loader() {
   custom_dir="$steamcl_mount/EFI/deck-sb"
   mkdir -p "$custom_dir"
   custom_jump="$custom_dir/$TARGET_FILENAME"
+  bootpng="$custom_dir/boot.png"
 
   if ! confirm_overwrite "$custom_jump"; then
     deck_dialog --infobox "Installation cancelled." 6 60
@@ -466,6 +468,7 @@ install_jump_loader() {
   fi
 
   install -m 0644 "$JUMP_SOURCE" "$custom_jump"
+  install -m 0644 "$PNG_SOURCE" "$bootpng"
   deck_dialog --msgbox "Copied jump loader to $(display_path "$custom_jump")." 8 80
 
   write_cfg_to_custom_dir "$custom_dir" "$grub_source"
