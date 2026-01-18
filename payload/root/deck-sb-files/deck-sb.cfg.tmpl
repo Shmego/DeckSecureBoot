@@ -42,6 +42,118 @@ fi
 
 set menu_label='Deck Secure Boot Loader'
 
+set deck_rootfs_uuid=
+set deck_rootfs_a_uuid=
+set deck_rootfs_b_uuid=
+set deck_rootfs_label=
+set deck_rootfs_ready=
+set deck_partset_target=
+
+function rootfs {
+    if [ x$deck_partset_target = xself ]; then
+        set deck_rootfs_uuid=$1
+    elif [ x$deck_partset_target = xA ]; then
+        set deck_rootfs_a_uuid=$1
+    elif [ x$deck_partset_target = xB ]; then
+        set deck_rootfs_b_uuid=$1
+    fi
+}
+
+function efi {
+    if [ x$deck_partset_target = xself ]; then
+        set deck_partset_efi=$1
+    elif [ x$deck_partset_target = xA ]; then
+        set deck_partset_efi_a=$1
+    elif [ x$deck_partset_target = xB ]; then
+        set deck_partset_efi_b=$1
+    fi
+}
+
+function var {
+    if [ x$deck_partset_target = xself ]; then
+        set deck_partset_var=$1
+    elif [ x$deck_partset_target = xA ]; then
+        set deck_partset_var_a=$1
+    elif [ x$deck_partset_target = xB ]; then
+        set deck_partset_var_b=$1
+    fi
+}
+
+function decksb_load_partset {
+    set deck_partset_target=$1
+    if search --file /SteamOS/partsets/$1 --set=deck_partset_root; then
+        if source ($deck_partset_root)/SteamOS/partsets/$1; then
+            echo "DeckSB: loaded partset $1 from /SteamOS/partsets/$1"
+        else
+            echo "DeckSB: failed to parse /SteamOS/partsets/$1"
+        fi
+        return
+    elif search --file /EFI/SteamOS/partsets/$1 --set=deck_partset_root; then
+        if source ($deck_partset_root)/EFI/SteamOS/partsets/$1; then
+            echo "DeckSB: loaded partset $1 from /EFI/SteamOS/partsets/$1"
+        else
+            echo "DeckSB: failed to parse /EFI/SteamOS/partsets/$1"
+        fi
+        return
+    elif search --file /efi/SteamOS/partsets/$1 --set=deck_partset_root; then
+        if source ($deck_partset_root)/efi/SteamOS/partsets/$1; then
+            echo "DeckSB: loaded partset $1 from /efi/SteamOS/partsets/$1"
+        else
+            echo "DeckSB: failed to parse /efi/SteamOS/partsets/$1"
+        fi
+        return
+    fi
+    echo "DeckSB: partset $1 not found"
+}
+
+function decksb_resolve_rootfs {
+    set deck_rootfs_uuid=
+    set deck_rootfs_a_uuid=
+    set deck_rootfs_b_uuid=
+    set deck_rootfs_label=
+    set deck_rootfs_ready=
+
+    decksb_load_partset self
+    decksb_load_partset A
+    decksb_load_partset B
+
+    if [ x$deck_rootfs_uuid != x ]; then
+        echo "DeckSB: self rootfs $deck_rootfs_uuid"
+    else
+        echo "DeckSB: self rootfs missing"
+    fi
+    if [ x$deck_rootfs_a_uuid != x ]; then
+        echo "DeckSB: A rootfs $deck_rootfs_a_uuid"
+    else
+        echo "DeckSB: A rootfs missing"
+    fi
+    if [ x$deck_rootfs_b_uuid != x ]; then
+        echo "DeckSB: B rootfs $deck_rootfs_b_uuid"
+    else
+        echo "DeckSB: B rootfs missing"
+    fi
+
+    if [ x$deck_rootfs_uuid != x ]; then
+        if [ x$deck_rootfs_uuid = x$deck_rootfs_a_uuid ]; then
+            set deck_rootfs_label=A
+        elif [ x$deck_rootfs_uuid = x$deck_rootfs_b_uuid ]; then
+            set deck_rootfs_label=B
+        else
+            set deck_rootfs_label=?
+        fi
+    fi
+    if [ x$deck_rootfs_label != x ]; then
+        echo "Booting SteamOS $deck_rootfs_label..."
+    else
+        echo "Booting SteamOS..."
+    fi
+
+    if [ x$deck_rootfs_uuid != x ]; then
+        search --no-floppy --fs-uuid --set=root $deck_rootfs_uuid
+        set deck_rootfs_ready=1
+    fi
+}
+
 menuentry 'SteamOS SB (shimless)' {
     # IMPORTANT: do NOT reset gfxpayload or terminal here.
     # We want to keep the hi-res framebuffer and gfxterm.
@@ -49,9 +161,9 @@ menuentry 'SteamOS SB (shimless)' {
     background_image $cmdpath/boot.png
     
     # Force a repaint to the framebuffer
-    echo " "
 
     insmod part_gpt
+    insmod fat
     insmod btrfs
     insmod gzio
 __DECK_SB_KERNEL_BLOCK__

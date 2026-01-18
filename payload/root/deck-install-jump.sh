@@ -16,6 +16,8 @@ DEFAULT_KERNEL_IMAGE="/boot/vmlinuz-linux-neptune-611"
 DEFAULT_INITRD_IMAGES="/boot/amd-ucode.img /boot/initramfs-linux-neptune-611.img"
 STEAMOS_KERNEL_IMAGE="$DEFAULT_KERNEL_IMAGE"
 STEAMOS_INITRD_IMAGES="$DEFAULT_INITRD_IMAGES"
+STEAMOS_ROOT_UUID=""
+STEAMOS_ROOT_SEARCH_CMD=""
 BOOT_LABELS=("$NEW_EFI_LABEL" "$OLD_EFI_LABEL")
 
 ISO_MOUNT="/run/archiso/bootmnt"
@@ -29,7 +31,6 @@ LINUX_GPT_GUIDS=(
   44479540-F297-41B2-9AF7-D131D5F0458A
   4F68BCE3-E8CD-4DB1-96E7-FBCAF984B709
 )
-JUMP_STATE_FILE="${DECK_SB_JUMP_STATE_FILE:-/run/deck-sb/jump.state}"
 
 mkdir -p "$TMP_EFI_MOUNT_BASE" "$TMP_LINUX_MOUNT_BASE"
 
@@ -116,6 +117,91 @@ parse_kernel_initrd_from_cfg() {
   return 0
 }
 
+parse_root_search_from_cfg() {
+  local cfg="$1"
+  [ -f "$cfg" ] || return 1
+
+  local line
+  line=$(awk '
+    $1 == "search" {
+      for (i = 1; i <= NF; i++) {
+        if ($i == "--set=root") {
+          print
+          exit
+        }
+        if ($i == "--set" && $(i + 1) == "root") {
+          print
+          exit
+        }
+      }
+    }
+  ' "$cfg" 2>/dev/null || true)
+  line=$(trim_config_value "$line")
+  if [ -n "$line" ]; then
+    STEAMOS_ROOT_SEARCH_CMD="$line"
+    return 0
+  fi
+  return 1
+}
+
+parse_root_uuid_from_cfg() {
+  local cfg="$1"
+  [ -f "$cfg" ] || return 1
+
+  local uuid
+  uuid=$(awk '
+    {
+      for (i = 1; i <= NF; i++) {
+        if ($i ~ /^--fs-uuid=/) {
+          sub(/^--fs-uuid=/, "", $i)
+          print $i
+          exit
+        }
+        if ($i == "--fs-uuid") {
+          for (j = i + 1; j <= NF; j++) {
+            if ($j !~ /^--/) {
+              print $j
+              exit
+            }
+          }
+        }
+      }
+    }
+  ' "$cfg" 2>/dev/null || true)
+  uuid=$(trim_config_value "$uuid")
+  if [ -n "$uuid" ]; then
+    STEAMOS_ROOT_UUID="$uuid"
+    return 0
+  fi
+
+  uuid=$(awk '
+    {
+      for (i = 1; i <= NF; i++) {
+        if ($i ~ /^root=UUID=/) {
+          sub(/^root=UUID=/, "", $i)
+          print $i
+          exit
+        }
+      }
+    }
+  ' "$cfg" 2>/dev/null || true)
+  uuid=$(trim_config_value "$uuid")
+  if [ -n "$uuid" ]; then
+    STEAMOS_ROOT_UUID="$uuid"
+    return 0
+  fi
+  return 1
+}
+
+parse_root_hint_from_cfg() {
+  local cfg="$1"
+  STEAMOS_ROOT_SEARCH_CMD=""
+  STEAMOS_ROOT_UUID=""
+  parse_root_search_from_cfg "$cfg" && return 0
+  parse_root_uuid_from_cfg "$cfg" && return 0
+  return 1
+}
+
 update_kernel_initrd_from_grub() {
   local grub_path="$1"
   local steamcl_path="$2"
@@ -125,11 +211,14 @@ update_kernel_initrd_from_grub() {
   if [ -z "$cfg" ]; then
     STEAMOS_KERNEL_IMAGE="$DEFAULT_KERNEL_IMAGE"
     STEAMOS_INITRD_IMAGES="$DEFAULT_INITRD_IMAGES"
+    STEAMOS_ROOT_SEARCH_CMD=""
+    STEAMOS_ROOT_UUID=""
     deck_dialog --msgbox "SteamOS grub.cfg was not found near the selected loader (e.g. steamos/grubx64.efi).\nUsing default kernel/initrd paths instead." 12 80
     return 1
   fi
 
   deck_dialog --infobox "Parsing kernel/initrd settings from $(display_path "$cfg")..." 6 70
+  parse_root_hint_from_cfg "$cfg" || true
   if parse_kernel_initrd_from_cfg "$cfg"; then
     deck_dialog --msgbox "Kernel/initrd paths captured from $(display_path "$cfg")." 8 80
     return 0
@@ -176,7 +265,7 @@ collect_kernel_candidates() {
 select_base_candidate() {
   local count=${#BASE_CANDIDATES[@]}
   if [ "$count" -eq 0 ]; then
-    deck_dialog --msgbox "Could not find any SteamOS steamcl EFI files. Mount your SteamOS installation and try again." 10 80
+    sb_error "Could not find any SteamOS steamcl EFI files. Mount your SteamOS installation and try again." 10 80
     exit 1
   fi
   if [ "$count" -eq 1 ]; then
@@ -217,37 +306,57 @@ write_cfg_to_custom_dir() {
   local custom_dir="$1"
   local grub_dev="$2"
   local cfg_path="$custom_dir/deck-sb.cfg"
-  local kernel_block
+  local kernel_block dynamic_root_block
 
   deck_dialog --infobox "Writing SteamOS boot config..." 5 70
 
   mkdir -p "$custom_dir" || {
-    deck_dialog --msgbox "Failed to create $custom_dir" 10 80
+    sb_error "Failed to create $custom_dir" 10 80
     exit 1
   }
 
   if [ ! -f "$DECK_SB_CFG_TEMPLATE" ]; then
-    deck_dialog --msgbox "Missing deck-sb.cfg template at $DECK_SB_CFG_TEMPLATE" 10 80
+    sb_error "Missing deck-sb.cfg template at $DECK_SB_CFG_TEMPLATE" 10 80
     exit 1
   fi
 
-  local disk root_uuid=""
-  disk=$(lsblk -nrpo PKNAME "$grub_dev" 2>/dev/null | head -n1)
-  [[ "$disk" != /dev/* ]] && disk="/dev/$disk"
+  dynamic_root_block=$(cat <<'EOF'
+    decksb_resolve_rootfs
+EOF
+)
 
-  while read -r name fstype pkname; do
-    [[ "$pkname" != "$disk" ]] && continue
-    [[ "$name" == "$grub_dev" ]] && continue
-    fstype=${fstype,,}
-    if [[ "$fstype" == "btrfs" || "$fstype" == "ext4" ]]; then
-      root_uuid=$(blkid -s UUID -o value "$name" 2>/dev/null || true)
-      [ -n "$root_uuid" ] && break
+  local root_uuid="" root_search_line=""
+  if [ -n "$STEAMOS_ROOT_SEARCH_CMD" ]; then
+    root_search_line="    $STEAMOS_ROOT_SEARCH_CMD"
+  else
+    if [ -n "$STEAMOS_ROOT_UUID" ]; then
+      root_uuid="$STEAMOS_ROOT_UUID"
+    else
+      local disk
+      disk=$(lsblk -nrpo PKNAME "$grub_dev" 2>/dev/null | head -n1)
+      [[ "$disk" != /dev/* ]] && disk="/dev/$disk"
+
+      while read -r name fstype pkname; do
+        [[ "$pkname" != "$disk" ]] && continue
+        [[ "$name" == "$grub_dev" ]] && continue
+        fstype=${fstype,,}
+        if [[ "$fstype" == "btrfs" || "$fstype" == "ext4" ]]; then
+          root_uuid=$(blkid -s UUID -o value "$name" 2>/dev/null || true)
+          [ -n "$root_uuid" ] && break
+        fi
+      done < <(lsblk -rpno NAME,FSTYPE,PKNAME)
     fi
-  done < <(lsblk -rpno NAME,FSTYPE,PKNAME)
+    if [ -n "$root_uuid" ]; then
+      root_search_line="    search --no-floppy --fs-uuid --set=root $root_uuid"
+    fi
+  fi
 
-if [ -n "$root_uuid" ]; then
+  if [ -n "$root_search_line" ]; then
     kernel_block=$(cat <<EOF
-    search --no-floppy --fs-uuid --set=root $root_uuid
+$dynamic_root_block
+    if [ -z "\$deck_rootfs_ready" ]; then
+$root_search_line
+    fi
     linux ${STEAMOS_KERNEL_IMAGE} \
         console=tty1 \
         rd.luks=0 rd.lvm=0 rd.md=0 rd.dm=0 \
@@ -268,8 +377,9 @@ if [ -n "$root_uuid" ]; then
     initrd ${STEAMOS_INITRD_IMAGES}
 EOF
 )
-else
+  else
     kernel_block=$(cat <<EOF
+$dynamic_root_block
     linux ${STEAMOS_KERNEL_IMAGE} \
         console=tty1 \
         rd.systemd.gpt_auto=no \
@@ -284,7 +394,7 @@ else
     initrd ${STEAMOS_INITRD_IMAGES}
 EOF
 )
-fi
+  fi
 
   {
     while IFS= read -r line || [ -n "$line" ]; do
@@ -295,7 +405,7 @@ fi
       fi
     done < "$DECK_SB_CFG_TEMPLATE"
   } > "$cfg_path" || {
-    deck_dialog --msgbox "Failed to write $cfg_path" 10 80
+    sb_error "Failed to write $cfg_path" 10 80
     exit 1
   }
 
@@ -337,7 +447,7 @@ maybe_update_clover_config() {
   deck_dialog --infobox "Adding SteamOS Jump Loader to Clover config..." 5 70
   local tmp_file
   tmp_file=$(mktemp) || {
-    deck_dialog --msgbox "Failed to create temporary file while editing $(display_path "$config_path")." 10 80
+    sb_error "Failed to create temporary file while editing $(display_path "$config_path")." 10 80
     return 1
   }
 
@@ -403,7 +513,7 @@ END { exit updated ? 0 : 1 }
   fi
 
   rm -f "$tmp_file" 2>/dev/null || true
-  deck_dialog --msgbox "Failed to update Clover config at $(display_path "$config_path"). Add the SteamOS Jump Loader entry manually." 10 80
+  sb_error "Failed to update Clover config at $(display_path "$config_path"). Add the SteamOS Jump Loader entry manually." 10 80
   return 1
 }
 
@@ -443,12 +553,12 @@ install_jump_loader() {
   steamcl_source=$(clean_source_path "$steamcl_source")
 
   if [ -z "$steamcl_mount" ] || [ -z "$steamcl_source" ]; then
-    deck_dialog --msgbox "Unable to determine mountpoint for $steamcl_path." 10 80
+    sb_error "Unable to determine mountpoint for $steamcl_path." 10 80
     exit 1
   fi
 
   if [ ! -b "$steamcl_source" ]; then
-    deck_dialog --msgbox "Backing device $steamcl_source not found." 10 80
+    sb_error "Backing device $steamcl_source not found." 10 80
     exit 1
   fi
 
@@ -463,12 +573,15 @@ install_jump_loader() {
   update_kernel_initrd_from_grub "$grub_path" "$steamcl_path"
 
   if ! ensure_rw_mount "$steamcl_mount"; then
-    deck_dialog --msgbox "Unable to remount $steamcl_mount writable. Remount it manually and retry." 10 80
+    sb_error "Unable to remount $steamcl_mount writable. Remount it manually and retry." 10 80
     exit 1
   fi
 
   custom_dir="$steamcl_mount/EFI/deck-sb"
-  mkdir -p "$custom_dir"
+  if ! mkdir -p "$custom_dir"; then
+    sb_error "Failed to create $custom_dir" 10 80
+    exit 1
+  fi
   custom_jump="$custom_dir/$TARGET_FILENAME"
   bootpng="$custom_dir/boot.png"
 
@@ -477,8 +590,14 @@ install_jump_loader() {
     return 0
   fi
 
-  install -m 0644 "$JUMP_SOURCE" "$custom_jump"
-  install -m 0644 "$PNG_SOURCE" "$bootpng"
+  if ! output=$(install -m 0644 "$JUMP_SOURCE" "$custom_jump" 2>&1); then
+    sb_error "Failed to copy jump loader to $(display_path "$custom_jump").\n\n$output" 12 80
+    exit 1
+  fi
+  if ! output=$(install -m 0644 "$PNG_SOURCE" "$bootpng" 2>&1); then
+    sb_error "Failed to copy boot image to $(display_path "$bootpng").\n\n$output" 12 80
+    exit 1
+  fi
   deck_dialog --msgbox "Copied jump loader to $(display_path "$custom_jump")." 8 80
 
   write_cfg_to_custom_dir "$custom_dir" "$grub_source"
@@ -488,7 +607,7 @@ install_jump_loader() {
   disk=$(find_disk_for_part "$steamcl_source" || true)
 
   if [ -z "$disk" ] || [ -z "$partnum" ]; then
-    deck_dialog --msgbox "Unable to derive disk metadata for $steamcl_source." 10 80
+    sb_error "Unable to derive disk metadata for $steamcl_source." 10 80
     exit 1
   fi
 
@@ -502,7 +621,7 @@ install_jump_loader() {
 
   deck_dialog --infobox "Adding UEFI boot entry..." 5 70
   if ! output=$(efibootmgr -c -d "$disk" -p "$partnum" -l "$efi_rel_path" -L "$NEW_EFI_LABEL" 2>&1); then
-    deck_dialog --msgbox "efibootmgr failed:\n$output" 10 80
+    sb_error "efibootmgr failed:\n$output" 10 80
     exit 1
   fi
 
@@ -571,7 +690,7 @@ remove_jump_loader() {
 
   local mp; mp=$(findmnt -rno TARGET -T "$jump_path" 2>/dev/null || true)
   if [ -n "$mp" ] && ! ensure_rw_mount "$mp"; then
-    deck_dialog --msgbox "Cannot obtain write access to $(display_path "$mp")." 9 70
+    sb_error "Cannot obtain write access to $(display_path "$mp")." 9 70
     return 1
   fi
 
@@ -643,7 +762,7 @@ sign_detected_kernels() {
 
 main() {
   if [ ! -f "$JUMP_SOURCE" ]; then
-    deck_dialog --msgbox "Jump loader $JUMP_SOURCE is missing from the live environment." 10 80
+    sb_error "Jump loader $JUMP_SOURCE is missing from the live environment." 10 80
     exit 1
   fi
 

@@ -7,7 +7,7 @@ export DIALOGRC=/etc/dialogrc
 
 BACKTITLE="${DECK_SB_BACKTITLE}"
 PENDING_FLAG="${DECK_SB_PENDING_FLAG}"
-ISO_DEBUG_LOG="${DECK_SB_ISO_DEBUG_LOG:-/run/deck-sb/install-iso-debug.log}"
+ISO_DEBUG_LOG="${DECK_SB_DEBUG_LOG:-/run/deck-sb/install-iso-debug.log}"
 SHOW_LOG_MENU="${DECK_SB_DEBUG:-0}"
 
 pending_flag() {
@@ -17,9 +17,9 @@ pending_flag() {
 open_shell() {
   hostname deck-sb 2>/dev/null || true
   clear
-  cat <<'EOM'
+  cat <<EOM
 =========================================
- Steam Deck SB ISO - Root Shell
+ DeckSB Manager v${DECK_SB_VERSION} - Root Shell
  To go back to menu: /root/menu.sh
 =========================================
 EOM
@@ -32,6 +32,27 @@ view_iso_debug_log() {
     return
   fi
   deck_dialog --textbox "$ISO_DEBUG_LOG" 22 90
+}
+
+run_menu_action() {
+  local title="$1"
+  shift
+  local status reason
+  sb_clear_error
+  if DECK_SB_MENU_CONTEXT=1 "$@"; then
+    status=0
+  else
+    status=$?
+  fi
+  if [ "$status" -ne 0 ]; then
+    if reason=$(sb_get_error 2>/dev/null); then
+      reason=$(printf '%s' "$reason" | sanitize_printable)
+      deck_message_box "$title failed (exit $status)" "$reason" 18 90
+    else
+      deck_message_box "$title failed (exit $status)" "No error details captured." 10 70
+    fi
+  fi
+  return 0
 }
 
 while true; do
@@ -65,8 +86,8 @@ while true; do
   fi
 
   case "$CHOICE" in
-    1) /root/deck-status.sh ;;
-    2) OUT=$(/root/deck-enroll.sh 2>&1 || true); deck_dialog --msgbox "$OUT" 22 90 ;;
+    1) run_menu_action "Check Boot Status" /root/deck-status.sh ;;
+    2) run_menu_action "Enable Secure Boot" /root/deck-enroll.sh ;;
     3)
       if /root/deck-install-jump.sh --detect-installed >/dev/null 2>&1; then
         SUB=$(deck_dialog --clear --stdout --default-item 1 \
@@ -74,20 +95,20 @@ while true; do
           1 "Reinstall jump loader" \
           2 "Remove jump loader") || continue
         case "$SUB" in
-          1) /root/deck-install-jump.sh ;;
-          2) /root/deck-install-jump.sh --remove ;;
+          1) run_menu_action "Reinstall jump loader" /root/deck-install-jump.sh ;;
+          2) run_menu_action "Remove jump loader" /root/deck-install-jump.sh --remove ;;
         esac
       else
-        /root/deck-install-jump.sh
+        run_menu_action "Install jump loader" /root/deck-install-jump.sh
       fi
       ;;
-    4) /root/deck-install-iso.sh ;;
-    5) /root/deck-sign-efi.sh ;;
+    4) run_menu_action "Install Deck SB ISO" /root/deck-install-iso.sh ;;
+    5) run_menu_action "Signing Utility" /root/deck-sign-efi.sh ;;
     6) view_iso_debug_log ;;
     7) : ;;
     8) reboot ;;
     9) poweroff ;;
     10) open_shell ;;
-    11) OUT=$(/root/deck-unenroll.sh 2>&1 || true); deck_dialog --msgbox "$OUT" 22 90 ;;
+    11) run_menu_action "Disable Secure Boot" /root/deck-unenroll.sh ;;
   esac
 done

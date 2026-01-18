@@ -58,4 +58,4 @@ status_lines=(
 
 [ -n "$pending_note" ] && status_lines+=("" "$pending_note")
 
-deck_dialog --msgbox "$(printf '%s\n' "${status_lines[@]}")" 18 90
+sb_info "$(printf '%s\n' "${status_lines[@]}")" 18 90

@@ -33,6 +33,7 @@ xfsprogs
 
 # UI / dialog
 dialog
+mc
 ncurses
 
 # Secure boot / EFI

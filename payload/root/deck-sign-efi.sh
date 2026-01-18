@@ -33,7 +33,7 @@ trap cleanup EXIT
 seed_default_search_dirs "SEARCH_DIRS" "ADDED_DIRS" "$ISO_MOUNT"
 progress_msg() {
   local msg="$1"
-  deck_dialog --infobox "$msg" 5 70
+  sb_progress "$msg" 5 70
 }
 
 display_path() {
@@ -169,7 +169,7 @@ if [ "${#ALL[@]}" -eq 0 ]; then
     checked_dirs="(no candidate directories)"
   fi
 
-  deck_dialog --msgbox "No EFI files were found.\nChecked: ${checked_dirs}.\nMount your target ESP and try again." 11 74
+  sb_error "No EFI files were found.\nChecked: ${checked_dirs}.\nMount your target ESP and try again." 11 74
   exit 1
 fi
 
@@ -217,7 +217,7 @@ while true; do
   done
 
   if [ "${#PICK_TARGETS[@]}" -eq 0 ]; then
-    deck_dialog --msgbox "No signable files were found." 8 60
+    sb_info "No signable files were found." 8 60
     break
   fi
 

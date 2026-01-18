@@ -1,6 +1,10 @@
 #!/bin/bash
 # Common environment values shared across Deck Secure Boot scripts.
-: "${DECK_SB_BACKTITLE:=Steam Deck Secure Boot Manager - D-Pad to navigate, A to select, B to cancel.}"
+: "${DECK_SB_VERSION:=__DECK_SB_VERSION__}"
+if [ "$DECK_SB_VERSION" = "__DECK_SB_VERSION__" ]; then
+  DECK_SB_VERSION="dev"
+fi
+: "${DECK_SB_BACKTITLE:=DeckSB Manager v${DECK_SB_VERSION} - D-Pad to navigate, A to select, B to cancel.}"
 : "${DECK_SB_KEYDIR:=/usr/share/deck-sb/keys}"
 : "${DECK_SB_PENDING_FLAG:=/run/sb_pending_reboot}"
 : "${DECK_SB_TARGET_FILENAME:=jump.efi}"
@@ -8,10 +12,14 @@
 : "${DECK_SB_NEW_EFI_LABEL:=Deck SB (Custom Jump)}"
 : "${DECK_SB_STATE_DIR:=/run/deck-sb}"
 : "${DECK_SB_JUMP_STATE_FILE:=$DECK_SB_STATE_DIR/jump.state}"
+: "${DECK_SB_ERROR_FILE:=$DECK_SB_STATE_DIR/last-error}"
+: "${DECK_SB_MENU_CONTEXT:=0}"
 : "${STEAMOS_ROOT_BASE:=/run/deck-os}"
 : "${STEAMOS_BOOT_BASE:=/run/deck-boot}"
 # Preferred label for the live ISO; fallback labels keep backward compatibility.
 : "${DECK_SB_ISO_LABEL:=DECK_SB}"
+: "${DECK_SB_ISO_DEBUG_LOG:=/run/deck-sb/install-iso-debug.log}"
+: "${DECK_SB_DEBUG_LOG:=$DECK_SB_ISO_DEBUG_LOG}"
 : "${DECK_SB_DEBUG_FLAG_FILE:=/root/.debug}"
 : "${DECK_SB_DEBUG:=0}"
 
@@ -20,6 +28,7 @@ if [ -f "$DECK_SB_DEBUG_FLAG_FILE" ]; then
 fi
 
 export DECK_SB_BACKTITLE
+export DECK_SB_VERSION
 export DECK_SB_KEYDIR
 export DECK_SB_PENDING_FLAG
 export DECK_SB_TARGET_FILENAME
@@ -27,9 +36,13 @@ export DECK_SB_OLD_EFI_LABEL
 export DECK_SB_NEW_EFI_LABEL
 export DECK_SB_STATE_DIR
 export DECK_SB_JUMP_STATE_FILE
+export DECK_SB_ERROR_FILE
+export DECK_SB_MENU_CONTEXT
 export STEAMOS_ROOT_BASE
 export STEAMOS_BOOT_BASE
 export DECK_SB_ISO_LABEL
+export DECK_SB_ISO_DEBUG_LOG
+export DECK_SB_DEBUG_LOG
 export DECK_SB_DEBUG_FLAG_FILE
 export DECK_SB_DEBUG
 
@@ -97,6 +110,79 @@ deck_message_box() {
 deck_info_box() {
   local body="$1" height="${2:-6}" width="${3:-70}"
   deck_dialog --infobox "$body" "$height" "$width"
+}
+
+sb_error() {
+  local msg="$1" height="${2:-10}" width="${3:-80}"
+  sb_set_error "$msg"
+  if [ "${DECK_SB_MENU_CONTEXT:-0}" -eq 1 ]; then
+    return 0
+  fi
+  deck_dialog --msgbox "$msg" "$height" "$width"
+  return 0
+}
+
+sb_info() {
+  local msg="$1" height="${2:-8}" width="${3:-80}"
+  deck_dialog --msgbox "$msg" "$height" "$width"
+}
+
+sb_progress() {
+  local msg="$1" height="${2:-6}" width="${3:-70}"
+  deck_dialog --infobox "$msg" "$height" "$width"
+}
+
+sb_log() {
+  local msg="$1"
+  [ "${DECK_SB_DEBUG:-0}" -eq 1 ] || return 0
+  mkdir -p "$(dirname "$DECK_SB_DEBUG_LOG")" 2>/dev/null || true
+  printf '%s %s\n' "$(date '+%F %T')" "$msg" >> "$DECK_SB_DEBUG_LOG"
+}
+
+log_debug() {
+  sb_log "$1"
+}
+
+sb_run_capture() {
+  local label="$1"
+  shift
+  local output status
+  output=$("$@" 2>&1)
+  status=$?
+  if [ "${DECK_SB_DEBUG:-0}" -eq 1 ]; then
+    sb_log "cmd=${label} exit=${status}"
+    if [ -n "$output" ]; then
+      sb_log "$output"
+    fi
+  fi
+  printf '%s' "$output"
+  return $status
+}
+
+sb_report() {
+  local heading="$1" body="$2" height="${3:-18}" width="${4:-90}"
+  if [ "${DECK_SB_MENU_CONTEXT:-0}" -eq 1 ]; then
+    deck_message_box "$heading" "$body" "$height" "$width"
+  else
+    printf '%s\n\n%s\n' "$heading" "$body"
+  fi
+}
+
+sb_clear_error() {
+  mkdir -p "$DECK_SB_STATE_DIR" 2>/dev/null || true
+  rm -f "$DECK_SB_ERROR_FILE" 2>/dev/null || true
+}
+
+sb_set_error() {
+  local msg="$1"
+  mkdir -p "$DECK_SB_STATE_DIR" 2>/dev/null || true
+  [ -n "$msg" ] || msg="Unknown error."
+  printf '%s\n' "$msg" > "$DECK_SB_ERROR_FILE"
+}
+
+sb_get_error() {
+  [ -s "$DECK_SB_ERROR_FILE" ] || return 1
+  cat "$DECK_SB_ERROR_FILE"
 }
 
 detect_fstype_for_path() {
@@ -573,5 +659,482 @@ prepare_steamos_root_for_write() {
     fi
   fi
 
+  return 1
+}
+
+cleanup_temp_iso_mount() {
+  local m preserve="${DECK_SB_ISO_ROOT:-}"
+  local labels=("${ISO_VOLUME_LABEL:-}" "DECK_SB" "DECK SB")
+  for m in "${ISO_TEMP_MOUNTS[@]-}"; do
+    if [ -n "$preserve" ] && [ "$m" = "$preserve" ]; then
+      log_debug "cleanup_temp_iso_mount: preserving ISO mount at $m"
+      continue
+    fi
+    local src fstype label keep_live=0
+    src=$(findmnt -rno SOURCE --target "$m" 2>/dev/null || true)
+    src=${src%%[*}
+    if [ -n "$src" ]; then
+      fstype=$(lsblk -nrpo FSTYPE "$src" 2>/dev/null | head -n1 || true)
+      label=$(lsblk -nrpo LABEL "$src" 2>/dev/null | head -n1 || true)
+      [[ "${fstype,,}" = "iso9660" ]] && keep_live=1
+      local iso_label
+      for iso_label in "${labels[@]}"; do
+        [ -n "$iso_label" ] && [ "$label" = "$iso_label" ] && keep_live=1
+      done
+    fi
+    if [ "$keep_live" -eq 1 ]; then
+      log_debug "cleanup_temp_iso_mount: keeping live media mount at $m (src=${src:-unknown})"
+      continue
+    fi
+    umount "$m" 2>/dev/null || true
+    rmdir "$m" 2>/dev/null || true
+  done
+  ISO_TEMP_MOUNTS=()
+  TEMP_ISO_MOUNT=""
+}
+
+block_inventory() {
+  # Emit NAME/FSTYPE/LABEL/MOUNTPOINT lines in lsblk -P style, preferring blkid.
+  local out=""
+  if command -v blkid >/dev/null 2>&1; then
+    out=$(blkid -o list -w /dev/null 2>/dev/null | awk '
+      NR==1 {next} # header
+      {
+        dev=$1; fstype=$2; label=$3
+        $1=""; $2=""; $3=""
+        sub(/^[ \t]+/, "", $0)
+        mount=$0
+        if (mount == "(not mounted)" || mount == "-" ) { mount="" }
+        printf "NAME=\"%s\" FSTYPE=\"%s\" LABEL=\"%s\" MOUNTPOINT=\"%s\"\n", dev, fstype, label, mount
+      }
+    ' ) || true
+    if [ -n "$out" ]; then
+      printf '%s\n' "$out"
+      return 0
+    fi
+  fi
+  lsblk -rpno NAME,FSTYPE,LABEL,MOUNTPOINT -P 2>/dev/null || lsblk -rpno NAME,FSTYPE,LABEL,MOUNTPOINT 2>/dev/null || true
+}
+
+collect_iso_roots() {
+  local roots=()
+  local candidate
+  local override="${DECK_SB_ISO_ROOT:-}"
+  declare -A seen=()
+  log_debug "collect_iso_roots: start (override=$override)"
+  for candidate in /run/archiso/bootmnt /run/initramfs/archiso/bootmnt; do
+    if [ -d "$candidate" ]; then
+      if [ -z "${seen[$candidate]:-}" ]; then
+        roots+=("$candidate")
+        seen["$candidate"]=1
+        log_debug "collect_iso_roots: add default candidate $candidate"
+      fi
+    fi
+  done
+  if [ -n "$override" ] && [ -d "$override" ] && [ -z "${seen[$override]:-}" ]; then
+    roots+=("$override")
+    seen["$override"]=1
+    log_debug "collect_iso_roots: add override $override"
+  fi
+  local labels=("${ISO_VOLUME_LABEL:-}" "DECK_SB" "DECK SB")
+  local line dev fstype mnt label
+  while IFS= read -r line; do
+    dev=${line#NAME=\"}; dev=${dev%%\"*}
+    fstype=${line#*FSTYPE=\"}; fstype=${fstype%%\"*}
+    label=${line#*LABEL=\"}; label=${label%%\"*}
+    mnt=${line#*MOUNTPOINT=\"}; mnt=${mnt%%\"*}
+    local is_live=0
+    [[ "${fstype,,}" = "iso9660" ]] && is_live=1
+    local candidate_label
+    for candidate_label in "${labels[@]}"; do
+      [ -n "$candidate_label" ] && [ "$label" = "$candidate_label" ] && is_live=1
+    done
+    [ "$is_live" -eq 1 ] || continue
+
+    if [ -n "$mnt" ] && [ "$mnt" != "-" ] && [ -d "$mnt" ]; then
+      if [ -z "${seen[$mnt]:-}" ]; then
+        roots+=("$mnt")
+        seen["$mnt"]=1
+        log_debug "collect_iso_roots: add mounted $dev at $mnt"
+      fi
+      continue
+    fi
+
+    local tmp
+    tmp=$(mktemp -d /run/deck-sb-iso.XXXXXX)
+    if mount -o ro "$dev" "$tmp" 2>/dev/null; then
+      ISO_TEMP_MOUNTS+=("$tmp")
+      TEMP_ISO_MOUNT="$tmp"
+      roots+=("$tmp")
+      seen["$tmp"]=1
+      log_debug "collect_iso_roots: mounted $dev at $tmp"
+    else
+      log_debug "collect_iso_roots: failed to mount $dev at $tmp"
+      rmdir "$tmp" 2>/dev/null || true
+    fi
+  done < <(block_inventory)
+
+  if [ "${#roots[@]}" -eq 0 ]; then
+    local mounted
+    mounted=$(mount_live_iso_device 2>/dev/null || true)
+    if [ -n "$mounted" ]; then
+      if [ -z "${seen[$mounted]:-}" ]; then
+        roots+=("$mounted")
+        seen["$mounted"]=1
+      fi
+      log_debug "collect_iso_roots: mount_live_iso_device returned $mounted"
+    fi
+  fi
+  if [ "${#roots[@]}" -eq 0 ]; then
+    log_debug "collect_iso_roots: none found"
+    return 1
+  fi
+  printf '%s\n' "${roots[@]}"
+  log_debug "collect_iso_roots: final roots=${roots[*]}"
+  return 0
+}
+
+find_live_usb_device() {
+  local labels=("${ISO_VOLUME_LABEL:-}" "DECK_SB" "DECK SB")
+  local line dev label candidate
+  log_debug "find_live_usb_device: searching labels ${labels[*]}"
+  while IFS= read -r line; do
+    dev=${line#NAME=\"}; dev=${dev%%\"*}
+    label=${line#*LABEL=\"}; label=${label%%\"*}
+    for candidate in "${labels[@]}"; do
+      [ -n "$candidate" ] || continue
+      if [ "$label" = "$candidate" ]; then
+        log_debug "find_live_usb_device: match $dev label=$label"
+        echo "$dev"
+        return 0
+      fi
+    done
+  done < <(block_inventory)
+  return 1
+}
+
+find_iso9660_device() {
+  local line dev fstype mnt
+  log_debug "find_iso9660_device: scanning for iso9660"
+  while IFS= read -r line; do
+    dev=${line#NAME=\"}; dev=${dev%%\"*}
+    fstype=${line#*FSTYPE=\"}; fstype=${fstype%%\"*}
+    mnt=${line#*MOUNTPOINT=\"}; mnt=${mnt%%\"*}
+    [[ "${fstype,,}" = "iso9660" ]] || continue
+    log_debug "find_iso9660_device: found $dev mnt=${mnt:--}"
+    if [ -n "$mnt" ] && [ "$mnt" != "-" ]; then
+      printf '%s|%s\n' "$dev" "$mnt"
+    else
+      printf '%s|\n' "$dev"
+    fi
+    return 0
+  done < <(block_inventory)
+  return 1
+}
+
+mount_live_iso_device() {
+  if [ -n "$TEMP_ISO_MOUNT" ] && [ -d "$TEMP_ISO_MOUNT" ]; then
+    if findmnt -rno SOURCE --target "$TEMP_ISO_MOUNT" >/dev/null 2>&1; then
+      log_debug "mount_live_iso_device: reusing TEMP_ISO_MOUNT=$TEMP_ISO_MOUNT"
+      echo "$TEMP_ISO_MOUNT"
+      return 0
+    fi
+    rmdir "$TEMP_ISO_MOUNT" 2>/dev/null || true
+    TEMP_ISO_MOUNT=""
+  fi
+  local dev
+  local pre_mounted=""
+  dev=$(find_live_usb_device 2>/dev/null || true)
+  if [ -z "$dev" ]; then
+    local iso_line
+    iso_line=$(find_iso9660_device 2>/dev/null || true)
+    if [ -n "$iso_line" ]; then
+      dev=${iso_line%%|*}
+      pre_mounted=${iso_line#*|}
+      [ "$pre_mounted" = "$iso_line" ] && pre_mounted=""
+    fi
+  fi
+  if [ -z "$dev" ]; then
+    log_debug "mount_live_iso_device: no device found"
+    return 1
+  fi
+  if [ -n "$pre_mounted" ] && [ -d "$pre_mounted" ]; then
+    log_debug "mount_live_iso_device: using pre-mounted $pre_mounted for $dev"
+    echo "$pre_mounted"
+    return 0
+  fi
+  local existing
+  existing=$(findmnt -rno TARGET -S "$dev" 2>/dev/null || true)
+  if [ -n "$existing" ] && [ -d "$existing" ]; then
+    log_debug "mount_live_iso_device: using existing mount $existing for $dev"
+    echo "$existing"
+    return 0
+  fi
+  TEMP_ISO_MOUNT=$(mktemp -d /run/deck-sb-iso.XXXXXX)
+  if mount -o ro "$dev" "$TEMP_ISO_MOUNT" 2>/dev/null; then
+    ISO_TEMP_MOUNTS+=("$TEMP_ISO_MOUNT")
+    log_debug "mount_live_iso_device: mounted $dev at $TEMP_ISO_MOUNT"
+    echo "$TEMP_ISO_MOUNT"
+    return 0
+  fi
+  log_debug "mount_live_iso_device: failed to mount $dev"
+  rmdir "$TEMP_ISO_MOUNT" 2>/dev/null || true
+  TEMP_ISO_MOUNT=""
+  return 1
+}
+
+find_kernel_source() {
+  local path
+  local candidates=(
+    /boot/vmlinuz-linux
+    /run/archiso/bootmnt/arch/boot/x86_64/vmlinuz-linux
+    /run/archiso/bootmnt/arch/boot/vmlinuz-linux
+    /run/initramfs/archiso/bootmnt/arch/boot/x86_64/vmlinuz-linux
+  )
+  for path in "${candidates[@]}"; do
+    if [ -f "$path" ]; then
+      echo "$path"
+      return 0
+    fi
+  done
+  local iso_roots=()
+  while IFS= read -r path; do
+    [ -n "$path" ] && iso_roots+=("$path")
+  done < <(collect_iso_roots 2>/dev/null || true)
+  for path in "${iso_roots[@]}"; do
+    local iso_candidates=(
+      "$path/$ISO_INSTALL_DIR/boot/x86_64/vmlinuz-linux"
+      "$path/$ISO_INSTALL_DIR/boot/vmlinuz-linux"
+      "$path/$ISO_INSTALL_DIR/vmlinuz-linux"
+    )
+    local iso_path
+    for iso_path in "${iso_candidates[@]}"; do
+      if [ -f "$iso_path" ]; then
+        echo "$iso_path"
+        return 0
+      fi
+    done
+    iso_path=$(find "$path" -maxdepth 5 -type f -name 'vmlinuz-linux' -print -quit 2>/dev/null || true)
+    if [ -n "$iso_path" ]; then
+      echo "$iso_path"
+      return 0
+    fi
+  done
+  return 1
+}
+
+find_initrd_source() {
+  local path
+  local candidates=(
+    /boot/initramfs-linux.img
+    /run/archiso/bootmnt/arch/boot/x86_64/initramfs-linux.img
+    /run/initramfs/archiso/bootmnt/arch/boot/x86_64/initramfs-linux.img
+  )
+  for path in "${candidates[@]}"; do
+    if [ -f "$path" ]; then
+      echo "$path"
+      return 0
+    fi
+  done
+  local iso_roots=()
+  while IFS= read -r path; do
+    [ -n "$path" ] && iso_roots+=("$path")
+  done < <(collect_iso_roots 2>/dev/null || true)
+  for path in "${iso_roots[@]}"; do
+    local iso_candidates=(
+      "$path/$ISO_INSTALL_DIR/boot/x86_64/initramfs-linux.img"
+      "$path/$ISO_INSTALL_DIR/boot/initramfs-linux.img"
+    )
+    local iso_path
+    for iso_path in "${iso_candidates[@]}"; do
+      if [ -f "$iso_path" ]; then
+        echo "$iso_path"
+        return 0
+      fi
+    done
+    iso_path=$(find "$path" -maxdepth 5 -type f -name 'initramfs-linux.img' -print -quit 2>/dev/null || true)
+    if [ -n "$iso_path" ]; then
+      echo "$iso_path"
+      return 0
+    fi
+  done
+  return 1
+}
+
+find_squashfs_source() {
+  local candidates=(
+    /run/archiso/airootfs.sfs
+    /run/archiso/bootmnt/arch/x86_64/airootfs.sfs
+    /run/archiso/bootmnt/airootfs.sfs
+  )
+  for c in "${candidates[@]}"; do
+    if [ -f "$c" ]; then
+      echo "$c"
+      return 0
+    fi
+  done
+  local path
+  local iso_roots=()
+  while IFS= read -r path; do
+    [ -n "$path" ] && iso_roots+=("$path")
+  done < <(collect_iso_roots 2>/dev/null || true)
+  for path in "${iso_roots[@]}"; do
+    local iso_candidates=(
+      "$path/$ISO_INSTALL_DIR/x86_64/airootfs.sfs"
+      "$path/$ISO_INSTALL_DIR/airootfs.sfs"
+      "$path/airootfs.sfs"
+    )
+    local iso_path
+    for iso_path in "${iso_candidates[@]}"; do
+      if [ -f "$iso_path" ]; then
+        echo "$iso_path"
+        return 0
+      fi
+    done
+  done
+  return 1
+}
+
+select_iso_files_from_root() {
+  # Try to resolve kernel/initrd/squashfs under a given ISO root.
+  local root="$1"
+  local -n _k="$2" _i="$3" _s="$4"
+  local k i s
+  k=""; i=""; s=""
+  [ -n "$root" ] && [ -d "$root" ] || return 1
+
+  local k_candidates=(
+    "$root/$ISO_INSTALL_DIR/boot/x86_64/vmlinuz-linux"
+    "$root/$ISO_INSTALL_DIR/boot/vmlinuz-linux"
+    "$root/$ISO_INSTALL_DIR/vmlinuz-linux"
+  )
+  local i_candidates=(
+    "$root/$ISO_INSTALL_DIR/boot/x86_64/initramfs-linux.img"
+    "$root/$ISO_INSTALL_DIR/boot/initramfs-linux.img"
+  )
+  local s_candidates=(
+    "$root/$ISO_INSTALL_DIR/x86_64/airootfs.sfs"
+    "$root/$ISO_INSTALL_DIR/airootfs.sfs"
+    "$root/airootfs.sfs"
+  )
+
+  for k in "${k_candidates[@]}"; do
+    [ -f "$k" ] && break || k=""
+  done
+  for i in "${i_candidates[@]}"; do
+    [ -f "$i" ] && break || i=""
+  done
+  for s in "${s_candidates[@]}"; do
+    [ -f "$s" ] && break || s=""
+  done
+
+  if [ -n "$k" ] && [ -n "$i" ] && [ -n "$s" ]; then
+    _k="$k"
+    _i="$i"
+    _s="$s"
+    log_debug "select_iso_files_from_root: success root=$root k=$k i=$i s=$s"
+    return 0
+  fi
+  log_debug "select_iso_files_from_root: missing in $root k=${k:-none} i=${i:-none} s=${s:-none}"
+  return 1
+}
+
+find_iso_payload_sources() {
+  local -n _k="$1" _i="$2" _s="$3"
+  _k=""; _i=""; _s=""
+
+  local -a roots=() temp_mounts=()
+  local -A seen=()
+
+  while IFS= read -r r; do
+    [ -n "$r" ] && [ -d "$r" ] || continue
+    if [ -z "${seen[$r]:-}" ]; then
+      roots+=("$r")
+      seen["$r"]=1
+      log_debug "find_iso_payload_sources: add root $r (collect_iso_roots)"
+    fi
+  done < <(collect_iso_roots 2>/dev/null || true)
+
+  while IFS= read -r line; do
+    local dev fstype mnt label is_live=0
+    dev=${line#NAME=\"}; dev=${dev%%\"*}
+    fstype=${line#*FSTYPE=\"}; fstype=${fstype%%\"*}
+    label=${line#*LABEL=\"}; label=${label%%\"*}
+    mnt=${line#*MOUNTPOINT=\"}; mnt=${mnt%%\"*}
+    [[ "${fstype,,}" = "iso9660" ]] && is_live=1
+    local iso_label
+    for iso_label in "${ISO_VOLUME_LABEL:-}" "DECK_SB" "DECK SB"; do
+      [ -n "$iso_label" ] && [ "$label" = "$iso_label" ] && is_live=1
+    done
+    [ "$is_live" -eq 1 ] || continue
+
+    local root_path="$mnt"
+    if [ -z "$root_path" ] || [ "$root_path" = "-" ]; then
+      root_path=$(mktemp -d /run/deck-sb-iso.XXXXXX)
+      if mount -o ro "$dev" "$root_path" 2>/dev/null; then
+        temp_mounts+=("$root_path")
+        ISO_TEMP_MOUNTS+=("$root_path")
+        TEMP_ISO_MOUNT="$root_path"
+        log_debug "find_iso_payload_sources: mounted iso9660 $dev at $root_path"
+      else
+        log_debug "find_iso_payload_sources: failed to mount iso9660 $dev at $root_path"
+        rmdir "$root_path" 2>/dev/null || true
+        continue
+      fi
+    fi
+
+    if [ -n "${seen[$root_path]:-}" ]; then
+      log_debug "find_iso_payload_sources: skip duplicate root $root_path"
+      continue
+    fi
+    roots+=("$root_path")
+    seen["$root_path"]=1
+    log_debug "find_iso_payload_sources: add root $root_path (iso9660 dev=$dev)"
+  done < <(block_inventory)
+
+  local r
+  for r in "${roots[@]}"; do
+    if select_iso_files_from_root "$r" _k _i _s; then
+      DECK_SB_ISO_ROOT="$r"
+      log_debug "find_iso_payload_sources: found payload under $r"
+      return 0
+    fi
+  done
+  log_debug "find_iso_payload_sources: no payload found across roots=${roots[*]}"
+
+  return 1
+}
+
+find_steamos_root() {
+  local partmp mounted_here
+  while read -r dev fstype parttype mnt; do
+    [[ -b "$dev" ]] || continue
+    local lowerfstype="${fstype,,}"
+    if [[ "$lowerfstype" =~ ^(vfat|fat|fat16|fat32)$ ]]; then
+      continue
+    fi
+    if [[ "$lowerfstype" =~ ^(ext4|btrfs|xfs|f2fs)$ ]]; then
+      partmp="$mnt"
+      mounted_here=0
+      if [ -z "$partmp" ] || [ "$partmp" = "-" ]; then
+        partmp="/run/deck-os/$(basename "$dev")"
+        mkdir -p "$partmp"
+        if mount "$dev" "$partmp"; then
+          mounted_here=1
+        else
+          rmdir "$partmp"
+          continue
+        fi
+      fi
+      if is_steamos_tree "$partmp"; then
+        echo "$partmp"
+        return 0
+      fi
+      if [ "$mounted_here" -eq 1 ]; then
+        umount "$partmp" 2>/dev/null || true
+        rmdir "$partmp" 2>/dev/null || true
+      fi
+    fi
+  done < <(lsblk -rpno NAME,FSTYPE,PARTTYPE,MOUNTPOINT)
   return 1
 }

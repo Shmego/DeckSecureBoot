@@ -3,10 +3,12 @@ set -euo pipefail
 
 # ---------------------------------------------------------------------------
 # Steam Deck Secure Boot ISO builder (plain ncurses)
-# Version: Beta 1.7
+# Version: set by DECK_SB_VERSION
 # ---------------------------------------------------------------------------
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
+DECK_SB_VERSION="Beta 1.9"
+ARCH_MIRROR_DATE="2025/12/21"
 WORKDIR=${WORKDIR:-/root/archlive}
 PROFILENAME=${PROFILENAME:-steamdeck-sb}
 PROFILE_SRC=/usr/share/archiso/configs/baseline
@@ -41,12 +43,14 @@ ISO_UNWANTED_PKGS=(
   zsh grml-zsh-config livecd-sounds terminus-font
 )
 
-echo "[+] Steam Deck SB ISO build (Beta 1.7)"
+echo "[+] Steam Deck SB ISO build (${DECK_SB_VERSION})"
 echo "[+] workdir     : $WORKDIR"
 echo "[+] profile dir : $PROFILE_DIR"
 echo "[+] payload dir : $PAYLOAD_DIR"
 echo "[+] keys dir    : $KEYS_DIR"
 echo "[+] debug mode  : $DECK_SB_DEBUG"
+echo "[+] version     : $DECK_SB_VERSION"
+echo "[+] mirror date : $ARCH_MIRROR_DATE (archive.archlinux.org)"
 
 for dir in "$PROFILE_DIR" "$PAYLOAD_DIR" "$KEYS_DIR"; do
   if [ ! -d "$dir" ]; then
@@ -78,12 +82,24 @@ fi
 # ---------------------------------------------------------------------------
 ensure_pkg() {
   local pkg="$1"
-  pacman -Sy
+  pacman -Sy --noconfirm
   if ! pacman -Qi "$pkg" >/dev/null 2>&1; then
     pacman -Sy --noconfirm "$pkg"
   fi
 }
 
+refresh_keyring() {
+  if ! command -v pacman-key >/dev/null 2>&1; then
+    return 0
+  fi
+  if [ ! -d /etc/pacman.d/gnupg ] || [ ! -f /etc/pacman.d/gnupg/pubring.gpg ]; then
+    pacman-key --init
+    pacman-key --populate archlinux
+  fi
+  pacman -Sy --noconfirm archlinux-keyring
+}
+
+refresh_keyring
 ensure_pkg archiso
 ensure_pkg grub
 ensure_pkg sbctl
@@ -99,9 +115,17 @@ cp -r "$PROFILE_SRC" "$PROFILENAME"
 cd "$PROFILENAME"
 
 # ---------------------------------------------------------------------------
-# 3) profiledef.sh
+# 3) profile overrides
 # ---------------------------------------------------------------------------
 cp "$PROFILE_DIR/profiledef.sh" profiledef.sh
+if [ -f "$PROFILE_DIR/pacman.conf" ]; then
+  cp "$PROFILE_DIR/pacman.conf" pacman.conf
+fi
+
+cat > mirrorlist <<EOF
+Server = https://archive.archlinux.org/repos/$ARCH_MIRROR_DATE/\$repo/os/\$arch
+EOF
+sed -i 's|^Include = .*mirrorlist$|Include = mirrorlist|' pacman.conf
 
 # ---------------------------------------------------------------------------
 # 5) package trimming / adding
@@ -147,6 +171,11 @@ fi
 # ---------------------------------------------------------------------------
 mkdir -p airootfs
 cp -a "$PAYLOAD_DIR"/. airootfs/
+
+version_escaped=${DECK_SB_VERSION//\\/\\\\}
+version_escaped=${version_escaped//&/\\&}
+version_escaped=${version_escaped//|/\\|}
+sed -i "s|__DECK_SB_VERSION__|$version_escaped|g" airootfs/root/deck-env.sh
 
 chmod +x \
   airootfs/root/menu.sh \
