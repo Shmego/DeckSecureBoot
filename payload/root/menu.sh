@@ -7,7 +7,7 @@ export DIALOGRC=/etc/dialogrc
 
 BACKTITLE="${DECK_SB_BACKTITLE}"
 PENDING_FLAG="${DECK_SB_PENDING_FLAG}"
-ISO_DEBUG_LOG="${DECK_SB_DEBUG_LOG:-/run/deck-sb/install-iso-debug.log}"
+ISO_DEBUG_LOG="$DECK_SB_DEBUG_LOG"
 SHOW_LOG_MENU="${DECK_SB_DEBUG:-0}"
 
 pending_flag() {

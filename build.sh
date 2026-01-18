@@ -18,7 +18,6 @@ KEYS_DIR=${KEYS_DIR:-"$SCRIPT_DIR/keys"}
 FIXED_GUID="decdecde-dec0-4dec-adec-decdecdecdec"
 RESIGNER="$SCRIPT_DIR/resigner.sh"
 RESIGN_WARN='[!] ISO WILL NOT BOOT under your Secure Boot keys unless you run the resigner manually.'
-DECK_SB_DEBUG=${DECK_SB_DEBUG:-0}  # set to 1 to enable live ISO debug log/menu
 
 ISO_EXTRA_PKGS=(
   sbctl
@@ -48,7 +47,6 @@ echo "[+] workdir     : $WORKDIR"
 echo "[+] profile dir : $PROFILE_DIR"
 echo "[+] payload dir : $PAYLOAD_DIR"
 echo "[+] keys dir    : $KEYS_DIR"
-echo "[+] debug mode  : $DECK_SB_DEBUG"
 echo "[+] version     : $DECK_SB_VERSION"
 echo "[+] mirror date : $ARCH_MIRROR_DATE (archive.archlinux.org)"
 
@@ -67,18 +65,7 @@ for key_file in "$KEYS_DIR/PK.key" "$KEYS_DIR/PK.pem"; do
 done
 
 # ---------------------------------------------------------------------------
-# 2) set debug flag file (copied into airootfs)
-# ---------------------------------------------------------------------------
-DEBUG_FLAG="$PAYLOAD_DIR/root/.debug"
-if [ "$DECK_SB_DEBUG" -eq 1 ]; then
-  echo "[+] enabling Deck SB debug mode (logs/menu)"
-  touch "$DEBUG_FLAG"
-else
-  rm -f "$DEBUG_FLAG"
-fi
-
-# ---------------------------------------------------------------------------
-# 3) install host deps if missing
+# 2) install host deps if missing
 # ---------------------------------------------------------------------------
 ensure_pkg() {
   local pkg="$1"

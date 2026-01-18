@@ -45,6 +45,8 @@ set menu_label='Deck Secure Boot Loader'
 set deck_rootfs_uuid=
 set deck_rootfs_a_uuid=
 set deck_rootfs_b_uuid=
+set deck_rootfs_a_fsuuid=__DECK_SB_ROOTFS_A_FSUUID__
+set deck_rootfs_b_fsuuid=__DECK_SB_ROOTFS_B_FSUUID__
 set deck_rootfs_label=
 set deck_rootfs_ready=
 set deck_partset_target=
@@ -148,9 +150,24 @@ function decksb_resolve_rootfs {
         echo "Booting SteamOS..."
     fi
 
-    if [ x$deck_rootfs_uuid != x ]; then
-        search --no-floppy --fs-uuid --set=root $deck_rootfs_uuid
-        set deck_rootfs_ready=1
+    if [ x$deck_rootfs_label = xA ]; then
+        set deck_rootfs_fsuuid=$deck_rootfs_a_fsuuid
+    elif [ x$deck_rootfs_label = xB ]; then
+        set deck_rootfs_fsuuid=$deck_rootfs_b_fsuuid
+    else
+        set deck_rootfs_fsuuid=
+    fi
+
+    if [ x$deck_rootfs_fsuuid != x ]; then
+        search --no-floppy --fs-uuid --set=root $deck_rootfs_fsuuid
+        if [ x$root != x ]; then
+            echo "DeckSB: root set via fs-uuid $deck_rootfs_fsuuid"
+            set deck_rootfs_ready=1
+        else
+            echo "DeckSB: unable to find fs-uuid $deck_rootfs_fsuuid"
+        fi
+    else
+        echo "DeckSB: missing fs-uuid mapping for $deck_rootfs_label"
     fi
 }
 
@@ -163,6 +180,7 @@ menuentry 'SteamOS SB (shimless)' {
     # Force a repaint to the framebuffer
 
     insmod part_gpt
+    insmod search_fs_uuid
     insmod fat
     insmod btrfs
     insmod gzio

@@ -212,7 +212,7 @@ docker run --rm -it \
   --privileged \
   -v $(pwd):/work \
   -v $(pwd)/iso-out:/out \
-  archlinux:latest \
+  archlinux:base-20251221.0.472429 \
   /bin/bash
 
 # Inside container

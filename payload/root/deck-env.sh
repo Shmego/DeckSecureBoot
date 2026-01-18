@@ -18,12 +18,10 @@ fi
 : "${STEAMOS_BOOT_BASE:=/run/deck-boot}"
 # Preferred label for the live ISO; fallback labels keep backward compatibility.
 : "${DECK_SB_ISO_LABEL:=DECK_SB}"
-: "${DECK_SB_ISO_DEBUG_LOG:=/run/deck-sb/install-iso-debug.log}"
-: "${DECK_SB_DEBUG_LOG:=$DECK_SB_ISO_DEBUG_LOG}"
-: "${DECK_SB_DEBUG_FLAG_FILE:=/root/.debug}"
+: "${DECK_SB_DEBUG_LOG:=/run/deck-sb/install-iso-debug.log}"
 : "${DECK_SB_DEBUG:=0}"
 
-if [ -f "$DECK_SB_DEBUG_FLAG_FILE" ]; then
+if [ "$DECK_SB_VERSION" = "dev" ]; then
   DECK_SB_DEBUG=1
 fi
 
@@ -41,9 +39,7 @@ export DECK_SB_MENU_CONTEXT
 export STEAMOS_ROOT_BASE
 export STEAMOS_BOOT_BASE
 export DECK_SB_ISO_LABEL
-export DECK_SB_ISO_DEBUG_LOG
 export DECK_SB_DEBUG_LOG
-export DECK_SB_DEBUG_FLAG_FILE
 export DECK_SB_DEBUG
 
 sanitize_printable() {

@@ -40,7 +40,7 @@ cleanup() {
 display_path() {
   format_display_path "$1" "$TMP_EFI_MOUNT_BASE" "$TMP_LINUX_MOUNT_BASE"
 }
-log_debug() { :; }
+log_debug() { sb_log "$1"; }
 
 clean_source_path() {
   local src="$1"
@@ -202,6 +202,68 @@ parse_root_hint_from_cfg() {
   return 1
 }
 
+find_partsets_dir() {
+  local base="$1"
+  local rel
+  for rel in "SteamOS/partsets" "EFI/SteamOS/partsets" "efi/SteamOS/partsets"; do
+    if [ -d "$base/$rel" ]; then
+      printf '%s\n' "$base/$rel"
+      return 0
+    fi
+  done
+  if command -v find >/dev/null 2>&1; then
+    local found
+    found=$(find "$base" -maxdepth 4 -type d -path '*/SteamOS/partsets' -print -quit 2>/dev/null || true)
+    if [ -n "$found" ]; then
+      printf '%s\n' "$found"
+      return 0
+    fi
+  fi
+  return 1
+}
+
+read_partset_rootfs_partuuid() {
+  local file="$1"
+  [ -f "$file" ] || return 1
+  awk '$1 == "rootfs" { print $2; exit }' "$file" 2>/dev/null
+}
+
+resolve_partuuid_to_fsuuid() {
+  local partuuid="$1"
+  local dev="" dev_candidate="" partuuid_lc uuid=""
+  [ -n "$partuuid" ] || return 1
+
+  uuid=$(blkid -t "PARTUUID=$partuuid" -s UUID -o value 2>/dev/null | head -n1 || true)
+  if [ -n "$uuid" ]; then
+    printf '%s\n' "$uuid"
+    return 0
+  fi
+  uuid=$(blkid -t "PARTUUID=${partuuid^^}" -s UUID -o value 2>/dev/null | head -n1 || true)
+  if [ -n "$uuid" ]; then
+    printf '%s\n' "$uuid"
+    return 0
+  fi
+
+  dev=$(readlink -f "/dev/disk/by-partuuid/$partuuid" 2>/dev/null || true)
+  if [ ! -b "$dev" ]; then
+    dev=$(readlink -f "/dev/disk/by-partuuid/${partuuid^^}" 2>/dev/null || true)
+  fi
+  if [ ! -b "$dev" ]; then
+    partuuid_lc="${partuuid,,}"
+    while read -r dev_candidate blk_partuuid; do
+      [ -n "$dev_candidate" ] || continue
+      [ -n "$blk_partuuid" ] || continue
+      if [ "${blk_partuuid,,}" = "$partuuid_lc" ]; then
+        dev="$dev_candidate"
+        break
+      fi
+    done < <(lsblk -rpno NAME,PARTUUID 2>/dev/null || true)
+  fi
+  [ -b "$dev" ] || return 1
+
+  blkid -s UUID -o value "$dev" 2>/dev/null || true
+}
+
 update_kernel_initrd_from_grub() {
   local grub_path="$1"
   local steamcl_path="$2"
@@ -326,6 +388,51 @@ EOF
 )
 
   local root_uuid="" root_search_line=""
+  local rootfs_a_fsuuid="" rootfs_b_fsuuid=""
+  local partsets_dir="" esp_root="" partuuid_a="" partuuid_b="" partsets_source=""
+
+  esp_root=$(findmnt -rno TARGET -T "$custom_dir" 2>/dev/null || true)
+  if [ -z "$esp_root" ]; then
+    esp_root=$(dirname "$(dirname "$custom_dir")")
+  fi
+  partsets_dir=$(find_partsets_dir "$esp_root" 2>/dev/null || true)
+  if [ -z "$partsets_dir" ] && [ -n "${TMP_EFI_MOUNT_BASE:-}" ]; then
+    partsets_dir=$(find_partsets_dir "$TMP_EFI_MOUNT_BASE" 2>/dev/null || true)
+  fi
+  if [ -n "$partsets_dir" ]; then
+    partsets_source=$(findmnt -rno SOURCE -T "$partsets_dir" 2>/dev/null || true)
+    partsets_source=$(clean_source_path "$partsets_source")
+    if [ -n "$partsets_source" ] && [ -n "$grub_dev" ] && [ "$partsets_source" != "$grub_dev" ]; then
+      log_debug "partsets: source $partsets_source != grub_dev $grub_dev (continuing)"
+    fi
+  fi
+  if [ -n "$partsets_dir" ]; then
+    if [[ "$partsets_dir" == "$esp_root"* ]]; then
+      log_debug "partsets: using esp root match $partsets_dir"
+    elif [ -n "${TMP_EFI_MOUNT_BASE:-}" ] && [[ "$partsets_dir" == "$TMP_EFI_MOUNT_BASE"/* ]]; then
+      log_debug "partsets: using fallback match $partsets_dir"
+    else
+      log_debug "partsets: ignoring $partsets_dir (outside esp root and $TMP_EFI_MOUNT_BASE)"
+      partsets_dir=""
+    fi
+  fi
+  log_debug "esp root: $esp_root"
+  if [ -n "$partsets_dir" ]; then
+    partuuid_a=$(read_partset_rootfs_partuuid "$partsets_dir/A" 2>/dev/null || true)
+    partuuid_b=$(read_partset_rootfs_partuuid "$partsets_dir/B" 2>/dev/null || true)
+    if [ -n "$partuuid_a" ]; then
+      rootfs_a_fsuuid=$(resolve_partuuid_to_fsuuid "$partuuid_a" 2>/dev/null || true)
+    fi
+    if [ -n "$partuuid_b" ]; then
+      rootfs_b_fsuuid=$(resolve_partuuid_to_fsuuid "$partuuid_b" 2>/dev/null || true)
+    fi
+    log_debug "partsets: $partsets_dir"
+  else
+    log_debug "partsets: missing"
+  fi
+  log_debug "rootfs partuuid: A=${partuuid_a:-missing} B=${partuuid_b:-missing}"
+  log_debug "rootfs fsuuid: A=${rootfs_a_fsuuid:-missing} B=${rootfs_b_fsuuid:-missing}"
+
   if [ -n "$STEAMOS_ROOT_SEARCH_CMD" ]; then
     root_search_line="    $STEAMOS_ROOT_SEARCH_CMD"
   else
@@ -357,6 +464,26 @@ $dynamic_root_block
     if [ -z "\$deck_rootfs_ready" ]; then
 $root_search_line
     fi
+    echo "DeckSB: root=\$root"
+    echo "DeckSB: linux ${STEAMOS_KERNEL_IMAGE} console=tty1 rd.luks=0 rd.lvm=0 rd.md=0 rd.dm=0 rd.systemd.gpt_auto=no log_buf_len=4M amd_iommu=off amdgpu.lockup_timeout=5000,10000,10000,5000 ttm.pages_min=2097152 amdgpu.sched_hw_submission=4 audit=0 fsck.mode=auto fsck.repair=preen fbcon=rotate:1 loglevel=3 quiet splash plymouth.ignore-serial-consoles fbcon=vc:4-6 noresume rd.steamos.efi=$grub_dev"
+    echo "DeckSB: initrd ${STEAMOS_INITRD_IMAGES}"
+    if [ -n "\$root" ]; then
+        if [ -f "(\$root)${STEAMOS_KERNEL_IMAGE}" ]; then
+            echo "DeckSB: kernel ok ${STEAMOS_KERNEL_IMAGE}"
+        else
+            echo "DeckSB: kernel missing ${STEAMOS_KERNEL_IMAGE}"
+            ls (\$root)/boot/
+        fi
+        for deck_initrd in ${STEAMOS_INITRD_IMAGES}; do
+            if [ -f "(\$root)\$deck_initrd" ]; then
+                echo "DeckSB: initrd ok \$deck_initrd"
+            else
+                echo "DeckSB: initrd missing \$deck_initrd"
+            fi
+        done
+    else
+        echo "DeckSB: root not set"
+    fi
     linux ${STEAMOS_KERNEL_IMAGE} \
         console=tty1 \
         rd.luks=0 rd.lvm=0 rd.md=0 rd.dm=0 \
@@ -380,6 +507,26 @@ EOF
   else
     kernel_block=$(cat <<EOF
 $dynamic_root_block
+    echo "DeckSB: root=\$root"
+    echo "DeckSB: linux ${STEAMOS_KERNEL_IMAGE} console=tty1 rd.systemd.gpt_auto=no log_buf_len=4M audit=0 fbcon=rotate:1 loglevel=3 quiet splash plymouth.ignore-serial-consoles fbcon=vc:4-6 noresume rd.steamos.efi=$grub_dev"
+    echo "DeckSB: initrd ${STEAMOS_INITRD_IMAGES}"
+    if [ -n "\$root" ]; then
+        if [ -f "(\$root)${STEAMOS_KERNEL_IMAGE}" ]; then
+            echo "DeckSB: kernel ok ${STEAMOS_KERNEL_IMAGE}"
+        else
+            echo "DeckSB: kernel missing ${STEAMOS_KERNEL_IMAGE}"
+            ls (\$root)/boot/
+        fi
+        for deck_initrd in ${STEAMOS_INITRD_IMAGES}; do
+            if [ -f "(\$root)\$deck_initrd" ]; then
+                echo "DeckSB: initrd ok \$deck_initrd"
+            else
+                echo "DeckSB: initrd missing \$deck_initrd"
+            fi
+        done
+    else
+        echo "DeckSB: root not set"
+    fi
     linux ${STEAMOS_KERNEL_IMAGE} \
         console=tty1 \
         rd.systemd.gpt_auto=no \
@@ -400,6 +547,10 @@ EOF
     while IFS= read -r line || [ -n "$line" ]; do
       if [ "$line" = "__DECK_SB_KERNEL_BLOCK__" ]; then
         printf '%s\n' "$kernel_block"
+      elif [[ "$line" == *"__DECK_SB_ROOTFS_A_FSUUID__"* ]]; then
+        printf '%s\n' "${line//__DECK_SB_ROOTFS_A_FSUUID__/$rootfs_a_fsuuid}"
+      elif [[ "$line" == *"__DECK_SB_ROOTFS_B_FSUUID__"* ]]; then
+        printf '%s\n' "${line//__DECK_SB_ROOTFS_B_FSUUID__/$rootfs_b_fsuuid}"
       else
         printf '%s\n' "$line"
       fi
