@@ -291,6 +291,18 @@ find_partsets_for_custom_dir() {
   return 0
 }
 
+find_esp_root_for_custom_dir() {
+  local custom_dir="$1"
+  local esp_root=""
+
+  esp_root=$(findmnt -rno TARGET -T "$custom_dir" 2>/dev/null || true)
+  if [ -z "$esp_root" ]; then
+    esp_root=$(dirname "$(dirname "$custom_dir")")
+  fi
+  printf '%s\n' "$esp_root"
+  return 0
+}
+
 sign_kernel_on_partuuid() {
   local partuuid="$1" label="$2"
   local dev="" fstype="" top_mount="" root_mount="" root_path="" subvol_rel="" ro_state="" ro_changed=0
@@ -469,8 +481,33 @@ sign_steamos_kernels_from_partsets() {
     return 0
   fi
 
-  local partsets_dir
+  local partsets_dir esp_root
   partsets_dir=$(find_partsets_for_custom_dir "$custom_dir")
+  esp_root=$(find_esp_root_for_custom_dir "$custom_dir")
+  if [ -n "$esp_root" ]; then
+    local conf_dir="" conf_file="" conf_found=0
+    for conf_dir in "$esp_root/SteamOS/conf"; do
+      if [ -d "$conf_dir" ]; then
+        log_debug "conf: using $conf_dir"
+        for conf_file in A.conf B.conf dev.conf; do
+          local conf_path="$conf_dir/$conf_file"
+          if [ -f "$conf_path" ]; then
+            log_debug "conf: $conf_file"
+            while IFS= read -r line; do
+              log_debug "conf: $conf_file: $line"
+            done < "$conf_path"
+          else
+            log_debug "conf: missing $conf_path"
+          fi
+        done
+        conf_found=1
+        break
+      fi
+    done
+    if [ "$conf_found" -eq 0 ]; then
+      log_debug "conf: missing under $esp_root"
+    fi
+  fi
   if [ -z "$partsets_dir" ]; then
     deck_dialog --msgbox "SteamOS partsets not found on the ESP. Skipping kernel signing." 9 80
     return 0
@@ -480,6 +517,17 @@ sign_steamos_kernels_from_partsets() {
   rootfs_self=$(read_partset_rootfs_partuuid "$partsets_dir/self" 2>/dev/null || true)
   rootfs_a=$(read_partset_rootfs_partuuid "$partsets_dir/A" 2>/dev/null || true)
   rootfs_b=$(read_partset_rootfs_partuuid "$partsets_dir/B" 2>/dev/null || true)
+  if [ -n "$rootfs_self" ]; then
+    if [ -n "$rootfs_a" ] && [ "$rootfs_self" = "$rootfs_a" ]; then
+      log_debug "partsets: active slot A"
+    elif [ -n "$rootfs_b" ] && [ "$rootfs_self" = "$rootfs_b" ]; then
+      log_debug "partsets: active slot B"
+    else
+      log_debug "partsets: active slot unknown (self not in A/B)"
+    fi
+  else
+    log_debug "partsets: active slot unknown (self missing)"
+  fi
 
   if [ -z "$rootfs_a" ] && [ -z "$rootfs_b" ]; then
     deck_dialog --msgbox "SteamOS rootfs PARTUUIDs not found. Skipping kernel signing." 9 80
