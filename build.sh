@@ -24,9 +24,11 @@ ISO_EXTRA_PKGS=(
   efitools
   mokutil
   dialog
+  mc
   nano
   efibootmgr
   parted
+  btrfs-progs
   ntfs-3g
   amd-ucode
   linux-firmware-amdgpu

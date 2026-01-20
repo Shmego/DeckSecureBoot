@@ -50,6 +50,19 @@ set deck_rootfs_b_fsuuid=__DECK_SB_ROOTFS_B_FSUUID__
 set deck_rootfs_label=
 set deck_rootfs_ready=
 set deck_partset_target=
+set deck_partset_efi_a=
+set deck_partset_efi_b=
+set deck_partset_var_a=
+set deck_partset_var_b=
+set deck_partset_home=
+set deck_partset_esp=
+set deck_efi_uuid=
+set deck_var_uuid=
+set deck_root_arg=
+set deck_efi_arg=
+set deck_var_arg=
+set deck_home_arg=
+set deck_esp_arg=
 
 function rootfs {
     if [ x$deck_partset_target = xself ]; then
@@ -78,6 +91,18 @@ function var {
         set deck_partset_var_a=$1
     elif [ x$deck_partset_target = xB ]; then
         set deck_partset_var_b=$1
+    fi
+}
+
+function home {
+    if [ x$deck_partset_home = x ]; then
+        set deck_partset_home=$1
+    fi
+}
+
+function esp {
+    if [ x$deck_partset_esp = x ]; then
+        set deck_partset_esp=$1
     fi
 }
 
@@ -118,6 +143,8 @@ function decksb_resolve_rootfs {
     decksb_load_partset self
     decksb_load_partset A
     decksb_load_partset B
+    decksb_load_partset all
+    decksb_load_partset shared
 
     if [ x$deck_rootfs_uuid != x ]; then
         echo "DeckSB: self rootfs $deck_rootfs_uuid"
@@ -148,6 +175,69 @@ function decksb_resolve_rootfs {
         echo "Booting SteamOS $deck_rootfs_label..."
     else
         echo "Booting SteamOS..."
+    fi
+
+    if [ x$deck_rootfs_label = xA ]; then
+        set deck_efi_uuid=$deck_partset_efi_a
+        set deck_var_uuid=$deck_partset_var_a
+    elif [ x$deck_rootfs_label = xB ]; then
+        set deck_efi_uuid=$deck_partset_efi_b
+        set deck_var_uuid=$deck_partset_var_b
+    else
+        set deck_efi_uuid=
+        set deck_var_uuid=
+    fi
+
+    if [ x$deck_rootfs_uuid != x ]; then
+        set deck_root_arg="root=PARTUUID=$deck_rootfs_uuid"
+    else
+        set deck_root_arg=
+    fi
+    if [ x$deck_efi_uuid != x ]; then
+        set deck_efi_arg="rd.steamos.efi=PARTUUID=$deck_efi_uuid"
+    else
+        set deck_efi_arg=
+    fi
+    if [ x$deck_var_uuid != x ]; then
+        set deck_var_arg="rd.steamos.var=PARTUUID=$deck_var_uuid"
+    else
+        set deck_var_arg=
+    fi
+    if [ x$deck_partset_home != x ]; then
+        set deck_home_arg="rd.steamos.home=PARTUUID=$deck_partset_home"
+    else
+        set deck_home_arg=
+    fi
+    if [ x$deck_partset_esp != x ]; then
+        set deck_esp_arg="rd.steamos.esp=PARTUUID=$deck_partset_esp"
+    else
+        set deck_esp_arg=
+    fi
+
+    if [ x$deck_root_arg != x ]; then
+        echo "DeckSB: root arg $deck_root_arg"
+    else
+        echo "DeckSB: root arg missing"
+    fi
+    if [ x$deck_efi_arg != x ]; then
+        echo "DeckSB: efi arg $deck_efi_arg"
+    else
+        echo "DeckSB: efi arg missing"
+    fi
+    if [ x$deck_var_arg != x ]; then
+        echo "DeckSB: var arg $deck_var_arg"
+    else
+        echo "DeckSB: var arg missing"
+    fi
+    if [ x$deck_home_arg != x ]; then
+        echo "DeckSB: home arg $deck_home_arg"
+    else
+        echo "DeckSB: home arg missing"
+    fi
+    if [ x$deck_esp_arg != x ]; then
+        echo "DeckSB: esp arg $deck_esp_arg"
+    else
+        echo "DeckSB: esp arg missing"
     fi
 
     if [ x$deck_rootfs_label = xA ]; then

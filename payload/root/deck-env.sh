@@ -132,7 +132,7 @@ sb_log() {
   local msg="$1"
   [ "${DECK_SB_DEBUG:-0}" -eq 1 ] || return 0
   mkdir -p "$(dirname "$DECK_SB_DEBUG_LOG")" 2>/dev/null || true
-  printf '%s %s\n' "$(date '+%F %T')" "$msg" >> "$DECK_SB_DEBUG_LOG"
+  printf '%s\n' "$msg" >> "$DECK_SB_DEBUG_LOG"
 }
 
 log_debug() {
@@ -418,11 +418,6 @@ collect_iso_device_skip_map() {
 locate_steamos_root_within() {
   local base="$1" fstype="$2" candidate
 
-  if is_steamos_tree "$base"; then
-    printf '%s\n' "$base"
-    return 0
-  fi
-
   local guesses=(
     '@rootfs'
     '@rootfs.ro'
@@ -444,12 +439,17 @@ locate_steamos_root_within() {
   if [ "$fstype" = "btrfs" ] && command -v find >/dev/null 2>&1; then
     local match etc_dir root_dir
     match=$(find "$base" -maxdepth 5 -path '*/etc/os-release' -print -quit 2>/dev/null || true)
-    if [ -n "$match" ] && grep -qi "SteamOS" "$match" 2>/dev/null; then
+    if [ -n "$match" ]; then
       etc_dir=$(dirname "$match")
       root_dir=$(dirname "$etc_dir")
       printf '%s\n' "$root_dir"
       return 0
     fi
+  fi
+
+  if is_steamos_tree "$base"; then
+    printf '%s\n' "$base"
+    return 0
   fi
 
   return 1
@@ -548,7 +548,7 @@ is_steamos_tree() {
   local dir="$1"
   [ -n "$dir" ] || return 1
   [ -f "$dir/etc/os-release" ] || return 1
-  grep -qi "SteamOS" "$dir/etc/os-release" 2>/dev/null
+  return 0
 }
 
 ensure_rw_mount() {

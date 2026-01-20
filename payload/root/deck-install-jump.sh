@@ -16,6 +16,7 @@ DEFAULT_KERNEL_IMAGE="/boot/vmlinuz-linux-neptune-611"
 DEFAULT_INITRD_IMAGES="/boot/amd-ucode.img /boot/initramfs-linux-neptune-611.img"
 STEAMOS_KERNEL_IMAGE="$DEFAULT_KERNEL_IMAGE"
 STEAMOS_INITRD_IMAGES="$DEFAULT_INITRD_IMAGES"
+STEAMOS_KERNEL_VERBOSITY="loglevel=3 quiet splash"
 STEAMOS_ROOT_UUID=""
 STEAMOS_ROOT_SEARCH_CMD=""
 BOOT_LABELS=("$NEW_EFI_LABEL" "$OLD_EFI_LABEL")
@@ -31,6 +32,10 @@ LINUX_GPT_GUIDS=(
   44479540-F297-41B2-9AF7-D131D5F0458A
   4F68BCE3-E8CD-4DB1-96E7-FBCAF984B709
 )
+
+if [ "${DECK_SB_DEBUG:-0}" -eq 1 ]; then
+  STEAMOS_KERNEL_VERBOSITY="loglevel=5"
+fi
 
 mkdir -p "$TMP_EFI_MOUNT_BASE" "$TMP_LINUX_MOUNT_BASE"
 
@@ -264,6 +269,254 @@ resolve_partuuid_to_fsuuid() {
   blkid -s UUID -o value "$dev" 2>/dev/null || true
 }
 
+find_partsets_for_custom_dir() {
+  local custom_dir="$1"
+  local esp_root=""
+  local partsets_dir=""
+
+  esp_root=$(findmnt -rno TARGET -T "$custom_dir" 2>/dev/null || true)
+  if [ -z "$esp_root" ]; then
+    esp_root=$(dirname "$(dirname "$custom_dir")")
+  fi
+  partsets_dir=$(find_partsets_dir "$esp_root" 2>/dev/null || true)
+  if [ -z "$partsets_dir" ] && [ -n "${TMP_EFI_MOUNT_BASE:-}" ]; then
+    partsets_dir=$(find_partsets_dir "$TMP_EFI_MOUNT_BASE" 2>/dev/null || true)
+  fi
+  if [ -n "$partsets_dir" ]; then
+    log_debug "partsets: $partsets_dir"
+  else
+    log_debug "partsets: missing"
+  fi
+  printf '%s\n' "$partsets_dir"
+  return 0
+}
+
+sign_kernel_on_partuuid() {
+  local partuuid="$1" label="$2"
+  local dev="" fstype="" top_mount="" root_mount="" root_path="" subvol_rel="" ro_state="" ro_changed=0
+
+  if [ -z "$partuuid" ]; then
+    log_debug "sign: $label missing partuuid"
+    return 1
+  fi
+  log_debug "sign: $label begin for partuuid $partuuid"
+
+  dev=$(readlink -f "/dev/disk/by-partuuid/$partuuid" 2>/dev/null || true)
+  if [ ! -b "$dev" ]; then
+    dev=$(readlink -f "/dev/disk/by-partuuid/${partuuid^^}" 2>/dev/null || true)
+  fi
+  if [ ! -b "$dev" ]; then
+    log_debug "sign: $label partuuid $partuuid not found"
+    return 1
+  fi
+  local dev_ro=""
+  dev_ro=$(lsblk -nrpo RO "$dev" 2>/dev/null | head -n1 || true)
+  log_debug "sign: $label device $dev ro flag: ${dev_ro:-unknown}"
+
+  fstype=$(lsblk -nrpo FSTYPE "$dev" 2>/dev/null | head -n1 || true)
+  fstype=${fstype,,}
+  top_mount=$(mktemp -d /run/deck-sb-top.XXXXXX)
+  root_mount=$(mktemp -d /run/deck-sb-root.XXXXXX)
+
+  if [ "$fstype" = "btrfs" ]; then
+    log_debug "sign: $label mounting top-level $dev at $top_mount"
+    if ! mount -o subvolid=5 "$dev" "$top_mount"; then
+      log_debug "sign: $label failed to mount top-level $dev"
+      rmdir "$top_mount" "$root_mount" 2>/dev/null || true
+      return 1
+    fi
+    log_debug "sign: $label mounted top-level at $top_mount"
+    log_debug "sign: $label top-level mount opts: $(findmnt -nr -o OPTIONS -T "$top_mount" 2>/dev/null || true)"
+
+    root_path=$(locate_steamos_root_within "$top_mount" "$fstype" 2>/dev/null || true)
+    if [ -z "$root_path" ]; then
+      log_debug "sign: $label SteamOS root not found in $dev"
+      if [ "${DECK_SB_DEBUG:-0}" -eq 1 ]; then
+        log_debug "sign: $label subvolumes under $dev:"
+        while IFS= read -r line; do
+          log_debug "sign: $label subvol $line"
+        done < <(btrfs subvolume list "$top_mount" 2>/dev/null || true) || true
+        log_debug "sign: $label top-level dirs:"
+        while IFS= read -r line; do
+          log_debug "sign: $label ls $line"
+        done < <(ls -la "$top_mount" 2>/dev/null || true) || true
+      fi
+      umount "$top_mount" 2>/dev/null || true
+      rmdir "$top_mount" "$root_mount" 2>/dev/null || true
+      return 1
+    fi
+
+    if [ "$root_path" = "$top_mount" ]; then
+      subvol_rel=""
+      log_debug "sign: $label root path is top-level mount"
+    else
+      subvol_rel="${root_path#$top_mount/}"
+    fi
+    local ro_raw="" ro_status=0
+    if ro_raw=$(btrfs property get -ts "$root_path" ro 2>&1); then
+      ro_status=0
+    else
+      ro_status=$?
+    fi
+    ro_state=$(printf '%s\n' "$ro_raw" | awk -F= '/^ro=/{print $2; exit}')
+    log_debug "sign: $label ro state for ${subvol_rel:-top-level} is ${ro_state:-unknown}"
+    if [ -z "$ro_state" ]; then
+      log_debug "sign: $label ro query exit=$ro_status"
+      if [ -n "$ro_raw" ]; then
+        while IFS= read -r line; do
+          log_debug "sign: $label ro query: $line"
+        done <<< "$ro_raw"
+      fi
+    fi
+
+    if [ "$ro_state" = "true" ] || [ -z "$ro_state" ]; then
+      log_debug "sign: $label setting ro=false on ${subvol_rel:-top-level}"
+      if btrfs property set -ts "$root_path" ro false 2>/dev/null; then
+        ro_changed=1
+        log_debug "sign: $label set ro=false on ${subvol_rel:-top-level}"
+      else
+        log_debug "sign: $label failed to set ro=false on ${subvol_rel:-top-level}"
+      fi
+    fi
+
+    if [ -n "$subvol_rel" ]; then
+      log_debug "sign: $label mounting subvol $subvol_rel at $root_mount"
+      if ! mount -o "subvol=$subvol_rel" "$dev" "$root_mount"; then
+        log_debug "sign: $label failed to mount subvol $subvol_rel"
+        if [ "$ro_changed" -eq 1 ]; then
+          btrfs property set -ts "$root_path" ro true 2>/dev/null || true
+        fi
+        umount "$top_mount" 2>/dev/null || true
+        rmdir "$top_mount" "$root_mount" 2>/dev/null || true
+        return 1
+      fi
+      log_debug "sign: $label mounted subvol at $root_mount"
+      log_debug "sign: $label subvol mount opts: $(findmnt -nr -o OPTIONS -T "$root_mount" 2>/dev/null || true)"
+    else
+      root_mount="$top_mount"
+      log_debug "sign: $label using top-level mount as rootfs"
+    fi
+  else
+    log_debug "sign: $label mounting $dev at $root_mount"
+    if ! mount "$dev" "$root_mount"; then
+      log_debug "sign: $label failed to mount $dev"
+      rmdir "$top_mount" "$root_mount" 2>/dev/null || true
+      return 1
+    fi
+    log_debug "sign: $label mounted $dev at $root_mount"
+    log_debug "sign: $label mount opts: $(findmnt -nr -o OPTIONS -T "$root_mount" 2>/dev/null || true)"
+  fi
+
+  local mount_opts
+  mount_opts=$(findmnt -nr -o OPTIONS -T "$root_mount" 2>/dev/null || true)
+  if mount_opts_has_flag "$mount_opts" "ro"; then
+    log_debug "sign: $label remounting $root_mount rw"
+    if mount -o remount,rw "$root_mount" 2>/dev/null; then
+      log_debug "sign: $label remount rw ok"
+    else
+      log_debug "sign: $label remount rw failed"
+    fi
+    log_debug "sign: $label mount opts after remount: $(findmnt -nr -o OPTIONS -T "$root_mount" 2>/dev/null || true)"
+  fi
+
+  local kernel_path="$root_mount$STEAMOS_KERNEL_IMAGE"
+  log_debug "sign: $label kernel path $kernel_path"
+  if [ -f "$kernel_path" ]; then
+    log_debug "sign: $label signing $kernel_path"
+    sb_run_capture "sbctl sign $label" sbctl sign -s "$kernel_path" >/dev/null || true
+    log_debug "sign: $label signed $kernel_path"
+  else
+    log_debug "sign: $label kernel missing $kernel_path"
+    if [ "${DECK_SB_DEBUG:-0}" -eq 1 ]; then
+      if [ -d "$root_mount/boot" ]; then
+        log_debug "sign: $label /boot listing:"
+        while IFS= read -r line; do
+          log_debug "sign: $label /boot $line"
+        done < <(ls -la "$root_mount/boot" 2>/dev/null || true) || true
+      else
+        log_debug "sign: $label /boot missing under rootfs"
+      fi
+      log_debug "sign: $label searching for vmlinuz* under rootfs"
+      while IFS= read -r line; do
+        log_debug "sign: $label found $line"
+      done < <(find "$root_mount" -maxdepth 3 -type f -name 'vmlinuz*' 2>/dev/null || true) || true
+    fi
+  fi
+
+  if [ "$root_mount" != "$top_mount" ]; then
+    log_debug "sign: $label unmounting $root_mount"
+    umount "$root_mount" 2>/dev/null || true
+  fi
+  if [ "$fstype" = "btrfs" ]; then
+    if [ "$ro_changed" -eq 1 ] && [ -n "$root_path" ]; then
+      if btrfs property set -ts "$root_path" ro true 2>/dev/null; then
+        log_debug "sign: $label restored ro=true on $subvol_rel"
+      else
+        log_debug "sign: $label failed to restore ro=true on $subvol_rel"
+      fi
+    fi
+    log_debug "sign: $label unmounting top-level $top_mount"
+    umount "$top_mount" 2>/dev/null || true
+  fi
+  rmdir "$top_mount" "$root_mount" 2>/dev/null || true
+  return 0
+}
+
+sign_steamos_kernels_from_partsets() {
+  local custom_dir="$1"
+  if ! command -v sbctl >/dev/null 2>&1; then
+    deck_dialog --msgbox "sbctl is not available in this environment.\nSkipping SteamOS kernel signing." 9 80
+    return 0
+  fi
+
+  local partsets_dir
+  partsets_dir=$(find_partsets_for_custom_dir "$custom_dir")
+  if [ -z "$partsets_dir" ]; then
+    deck_dialog --msgbox "SteamOS partsets not found on the ESP. Skipping kernel signing." 9 80
+    return 0
+  fi
+
+  local rootfs_self="" rootfs_a="" rootfs_b=""
+  rootfs_self=$(read_partset_rootfs_partuuid "$partsets_dir/self" 2>/dev/null || true)
+  rootfs_a=$(read_partset_rootfs_partuuid "$partsets_dir/A" 2>/dev/null || true)
+  rootfs_b=$(read_partset_rootfs_partuuid "$partsets_dir/B" 2>/dev/null || true)
+
+  if [ -z "$rootfs_a" ] && [ -z "$rootfs_b" ]; then
+    deck_dialog --msgbox "SteamOS rootfs PARTUUIDs not found. Skipping kernel signing." 9 80
+    return 0
+  fi
+
+  local order=()
+  if [ -n "$rootfs_self" ] && [ "$rootfs_self" = "$rootfs_a" ]; then
+    order=("A" "B")
+  elif [ -n "$rootfs_self" ] && [ "$rootfs_self" = "$rootfs_b" ]; then
+    order=("B" "A")
+  else
+    order=("A" "B")
+  fi
+
+  deck_dialog --infobox "Signing SteamOS kernels (active slot first)..." 6 70
+  local slot partuuid sign_fail=0
+  for slot in "${order[@]}"; do
+    if [ "$slot" = "A" ]; then
+      partuuid="$rootfs_a"
+    else
+      partuuid="$rootfs_b"
+    fi
+    [ -n "$partuuid" ] || continue
+    if ! sign_kernel_on_partuuid "$partuuid" "$slot"; then
+      log_debug "sign: $slot failed"
+      sign_fail=1
+    fi
+  done
+  if [ "$sign_fail" -eq 1 ]; then
+    deck_dialog --msgbox "SteamOS kernel signing attempt complete.\nSome slots failed to sign; check the debug log for details." 8 80
+  else
+    deck_dialog --msgbox "SteamOS kernel signing attempt complete." 7 70
+  fi
+  return 0
+}
+
 update_kernel_initrd_from_grub() {
   local grub_path="$1"
   local steamcl_path="$2"
@@ -395,10 +648,7 @@ EOF
   if [ -z "$esp_root" ]; then
     esp_root=$(dirname "$(dirname "$custom_dir")")
   fi
-  partsets_dir=$(find_partsets_dir "$esp_root" 2>/dev/null || true)
-  if [ -z "$partsets_dir" ] && [ -n "${TMP_EFI_MOUNT_BASE:-}" ]; then
-    partsets_dir=$(find_partsets_dir "$TMP_EFI_MOUNT_BASE" 2>/dev/null || true)
-  fi
+  partsets_dir=$(find_partsets_for_custom_dir "$custom_dir")
   if [ -n "$partsets_dir" ]; then
     partsets_source=$(findmnt -rno SOURCE -T "$partsets_dir" 2>/dev/null || true)
     partsets_source=$(clean_source_path "$partsets_source")
@@ -426,9 +676,6 @@ EOF
     if [ -n "$partuuid_b" ]; then
       rootfs_b_fsuuid=$(resolve_partuuid_to_fsuuid "$partuuid_b" 2>/dev/null || true)
     fi
-    log_debug "partsets: $partsets_dir"
-  else
-    log_debug "partsets: missing"
   fi
   log_debug "rootfs partuuid: A=${partuuid_a:-missing} B=${partuuid_b:-missing}"
   log_debug "rootfs fsuuid: A=${rootfs_a_fsuuid:-missing} B=${rootfs_b_fsuuid:-missing}"
@@ -465,7 +712,7 @@ $dynamic_root_block
 $root_search_line
     fi
     echo "DeckSB: root=\$root"
-    echo "DeckSB: linux ${STEAMOS_KERNEL_IMAGE} console=tty1 rd.luks=0 rd.lvm=0 rd.md=0 rd.dm=0 rd.systemd.gpt_auto=no log_buf_len=4M amd_iommu=off amdgpu.lockup_timeout=5000,10000,10000,5000 ttm.pages_min=2097152 amdgpu.sched_hw_submission=4 audit=0 fsck.mode=auto fsck.repair=preen fbcon=rotate:1 loglevel=3 quiet splash plymouth.ignore-serial-consoles fbcon=vc:4-6 noresume rd.steamos.efi=$grub_dev"
+    echo "DeckSB: linux ${STEAMOS_KERNEL_IMAGE} console=tty1 rd.luks=0 rd.lvm=0 rd.md=0 rd.dm=0 rd.systemd.gpt_auto=no log_buf_len=4M amd_iommu=off amdgpu.lockup_timeout=5000,10000,10000,5000 ttm.pages_min=2097152 amdgpu.sched_hw_submission=4 audit=0 fsck.mode=auto fsck.repair=preen fbcon=rotate:1 ${STEAMOS_KERNEL_VERBOSITY} plymouth.ignore-serial-consoles fbcon=vc:4-6 noresume \$deck_root_arg \$deck_efi_arg \$deck_var_arg \$deck_home_arg \$deck_esp_arg"
     echo "DeckSB: initrd ${STEAMOS_INITRD_IMAGES}"
     if [ -n "\$root" ]; then
         if [ -f "(\$root)${STEAMOS_KERNEL_IMAGE}" ]; then
@@ -484,7 +731,7 @@ $root_search_line
     else
         echo "DeckSB: root not set"
     fi
-    linux ${STEAMOS_KERNEL_IMAGE} \
+    if linux ${STEAMOS_KERNEL_IMAGE} \
         console=tty1 \
         rd.luks=0 rd.lvm=0 rd.md=0 rd.dm=0 \
         rd.systemd.gpt_auto=no \
@@ -496,19 +743,29 @@ $root_search_line
         audit=0 \
         fsck.mode=auto fsck.repair=preen \
         fbcon=rotate:1 \
-        loglevel=3 quiet splash \
+        ${STEAMOS_KERNEL_VERBOSITY} \
         plymouth.ignore-serial-consoles \
         fbcon=vc:4-6 \
         noresume \
-        rd.steamos.efi=$grub_dev
-    initrd ${STEAMOS_INITRD_IMAGES}
+        \$deck_root_arg \$deck_efi_arg \$deck_var_arg \$deck_home_arg \$deck_esp_arg; then
+        if initrd ${STEAMOS_INITRD_IMAGES}; then
+            boot
+        else
+            echo "DeckSB: initrd load failed. Re-run the EFI installer to refresh SteamOS boot assets."
+            sleep 5
+        fi
+    else
+        echo "DeckSB: kernel load failed. The active kernel is unsigned."
+        echo "DeckSB: Re-run the EFI installer to sign all SteamOS kernels."
+        sleep 5
+    fi
 EOF
 )
   else
     kernel_block=$(cat <<EOF
 $dynamic_root_block
     echo "DeckSB: root=\$root"
-    echo "DeckSB: linux ${STEAMOS_KERNEL_IMAGE} console=tty1 rd.systemd.gpt_auto=no log_buf_len=4M audit=0 fbcon=rotate:1 loglevel=3 quiet splash plymouth.ignore-serial-consoles fbcon=vc:4-6 noresume rd.steamos.efi=$grub_dev"
+    echo "DeckSB: linux ${STEAMOS_KERNEL_IMAGE} console=tty1 rd.systemd.gpt_auto=no log_buf_len=4M audit=0 fbcon=rotate:1 ${STEAMOS_KERNEL_VERBOSITY} plymouth.ignore-serial-consoles fbcon=vc:4-6 noresume \$deck_root_arg \$deck_efi_arg \$deck_var_arg \$deck_home_arg \$deck_esp_arg"
     echo "DeckSB: initrd ${STEAMOS_INITRD_IMAGES}"
     if [ -n "\$root" ]; then
         if [ -f "(\$root)${STEAMOS_KERNEL_IMAGE}" ]; then
@@ -527,18 +784,28 @@ $dynamic_root_block
     else
         echo "DeckSB: root not set"
     fi
-    linux ${STEAMOS_KERNEL_IMAGE} \
+    if linux ${STEAMOS_KERNEL_IMAGE} \
         console=tty1 \
         rd.systemd.gpt_auto=no \
         log_buf_len=4M \
         audit=0 \
         fbcon=rotate:1 \
-        loglevel=3 quiet splash \
+        ${STEAMOS_KERNEL_VERBOSITY} \
         plymouth.ignore-serial-consoles \
         fbcon=vc:4-6 \
         noresume \
-        rd.steamos.efi=$grub_dev
-    initrd ${STEAMOS_INITRD_IMAGES}
+        \$deck_root_arg \$deck_efi_arg \$deck_var_arg \$deck_home_arg \$deck_esp_arg; then
+        if initrd ${STEAMOS_INITRD_IMAGES}; then
+            boot
+        else
+            echo "DeckSB: initrd load failed. Re-run the EFI installer to refresh SteamOS boot assets."
+            sleep 5
+        fi
+    else
+        echo "DeckSB: kernel load failed. The active kernel is unsigned."
+        echo "DeckSB: Re-run the EFI installer to sign all SteamOS kernels."
+        sleep 5
+    fi
 EOF
 )
   fi
@@ -772,8 +1039,10 @@ install_jump_loader() {
 
   deck_dialog --infobox "Adding UEFI boot entry..." 5 70
   if ! output=$(efibootmgr -c -d "$disk" -p "$partnum" -l "$efi_rel_path" -L "$NEW_EFI_LABEL" 2>&1); then
-    sb_error "efibootmgr failed:\n$output" 10 80
-    exit 1
+    sb_report "UEFI boot entry not updated" "efibootmgr failed:\n$output\n\nThe jump loader was still installed at $(display_path "$custom_jump"). You can add a boot entry manually or use Boot From File." 18 90
+    record_jump_state "$custom_jump"
+    LAST_INSTALLED_JUMP="$custom_jump"
+    return 0
   fi
 
   deck_dialog --msgbox "Boot entry created:\n$output" 8 80
@@ -926,6 +1195,7 @@ main() {
 
   install_jump_loader "$SELECTED_BASE" "$SELECTED_GRUB"
   if [ -n "$LAST_INSTALLED_JUMP" ]; then
+    sign_steamos_kernels_from_partsets "$(dirname "$LAST_INSTALLED_JUMP")"
     sign_detected_kernels
   fi
 }
