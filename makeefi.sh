@@ -4,11 +4,12 @@ set -euo pipefail
 # set FORCE_REBUILD=1 ./makeefi.sh to force a clean rebuild
 FORCE_REBUILD="${FORCE_REBUILD:-0}"
 
-KEY_DIR="keys"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
+KEY_DIR="${SCRIPT_DIR}/keys"
 PK_KEY="${KEY_DIR}/PK.key"
 PK_CRT="${KEY_DIR}/PK.pem"
 
-OUT_DIR="dist"
+OUT_DIR="${SCRIPT_DIR}/dist"
 OUT_EFI="${OUT_DIR}/steamos-jump.signed.efi"
 
 # pin to the working grub
@@ -18,6 +19,9 @@ BUILD_ROOT="$(pwd)/build-grub"
 GRUB_SRC="${BUILD_ROOT}/grub"
 GRUB_PREFIX="${BUILD_ROOT}/out"
 GRUB_MK="${GRUB_PREFIX}/bin/grub-mkstandalone"
+DECKSB_GRUB_CMD_SRC="${SCRIPT_DIR}/grub-decksb-conf.c"
+DECKSB_GRUB_CMD_DST_REL="grub-core/commands/decksb_conf.c"
+REBUILD_GRUB=0
 
 install_build_deps() {
   pacman -Sy
@@ -40,6 +44,7 @@ mkdir -p "$OUT_DIR"
 if [[ "$FORCE_REBUILD" == "1" ]]; then
   echo "[*] FORCE_REBUILD=1 -> removing $BUILD_ROOT"
   rm -rf "$BUILD_ROOT"
+  REBUILD_GRUB=1
 fi
 mkdir -p "$BUILD_ROOT"
 
@@ -54,8 +59,27 @@ echo "[*] checking out GRUB commit $GRUB_COMMIT ..."
 git fetch origin
 git checkout --force "$GRUB_COMMIT"
 
+if [ -f "$DECKSB_GRUB_CMD_SRC" ]; then
+  echo "[*] installing decksb_conf module source ..."
+  cp "$DECKSB_GRUB_CMD_SRC" "$GRUB_SRC/$DECKSB_GRUB_CMD_DST_REL"
+  if ! grep -q "name = decksb_conf" "$GRUB_SRC/grub-core/Makefile.core.def"; then
+    cat >> "$GRUB_SRC/grub-core/Makefile.core.def" <<'EOF'
+
+module = {
+  name = decksb_conf;
+  common = commands/decksb_conf.c;
+};
+EOF
+    REBUILD_GRUB=1
+  fi
+fi
+
+if [ ! -f "$GRUB_PREFIX/lib/grub/x86_64-efi/decksb_conf.mod" ]; then
+  REBUILD_GRUB=1
+fi
+
 # --- build grub if needed ---
-if [[ ! -x "$GRUB_MK" ]]; then
+if [[ ! -x "$GRUB_MK" || "$REBUILD_GRUB" == "1" ]]; then
   echo "[*] patching shim fallback ..."
   sed -i 's/return grub_error (GRUB_ERR_ACCESS_DENIED, N_("shim protocols not found"));/return GRUB_ERR_NONE;/' \
     grub-core/kern/efi/sb.c
@@ -160,7 +184,7 @@ echo "[*] building standalone GRUB EFI ..."
 "$GRUB_MK" \
   -O x86_64-efi \
   -o "$EFI_RAW" \
-  --modules="part_gpt part_msdos fat ext2 search search_fs_file normal efi_gop efi_uga regexp gfxterm all_video" \
+  --modules="part_gpt part_msdos fat ext2 search search_fs_file normal efi_gop efi_uga regexp gfxterm all_video decksb_conf" \
   "boot/grub/unicode.pf2=$(pwd)/unicode.pf2" \
   "boot/grub/grub.cfg=${CFG_FILE}"
 

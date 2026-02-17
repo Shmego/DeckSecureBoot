@@ -42,6 +42,9 @@ fi
 
 set menu_label='Deck Secure Boot Loader'
 
+set decksb_slot=
+set decksb_reason=
+set decksb_conf_root=
 set deck_rootfs_uuid=
 set deck_rootfs_a_uuid=
 set deck_rootfs_b_uuid=
@@ -108,6 +111,29 @@ function esp {
 
 function decksb_load_partset {
     set deck_partset_target=$1
+    if [ -n "$cmdpath" ] && [ -f "$cmdpath/partsets/$1" ]; then
+        if source $cmdpath/partsets/$1; then
+            echo "DeckSB: loaded partset $1 from $cmdpath/partsets/$1"
+        else
+            echo "DeckSB: failed to parse $cmdpath/partsets/$1"
+        fi
+        return
+    fi
+    if search --file /EFI/deck-sb/partsets/$1 --set=deck_partset_root; then
+        if source ($deck_partset_root)/EFI/deck-sb/partsets/$1; then
+            echo "DeckSB: loaded partset $1 from /EFI/deck-sb/partsets/$1"
+        else
+            echo "DeckSB: failed to parse /EFI/deck-sb/partsets/$1"
+        fi
+        return
+    elif search --file /efi/deck-sb/partsets/$1 --set=deck_partset_root; then
+        if source ($deck_partset_root)/efi/deck-sb/partsets/$1; then
+            echo "DeckSB: loaded partset $1 from /efi/deck-sb/partsets/$1"
+        else
+            echo "DeckSB: failed to parse /efi/deck-sb/partsets/$1"
+        fi
+        return
+    fi
     if search --file /SteamOS/partsets/$1 --set=deck_partset_root; then
         if source ($deck_partset_root)/SteamOS/partsets/$1; then
             echo "DeckSB: loaded partset $1 from /SteamOS/partsets/$1"
@@ -133,6 +159,40 @@ function decksb_load_partset {
     echo "DeckSB: partset $1 not found"
 }
 
+function decksb_load_bootconf {
+    set decksb_slot=
+    set decksb_reason=
+    set decksb_conf_root=
+    set decksb_saved_root=$root
+    set decksb_saved_prefix=$prefix
+    if search --no-floppy --file /SteamOS/conf/A.conf --set=decksb_conf_root; then
+        decksb_conf ($decksb_conf_root)/SteamOS/conf
+    elif search --no-floppy --file /EFI/SteamOS/conf/A.conf --set=decksb_conf_root; then
+        decksb_conf ($decksb_conf_root)/EFI/SteamOS/conf
+    elif search --no-floppy --file /efi/SteamOS/conf/A.conf --set=decksb_conf_root; then
+        decksb_conf ($decksb_conf_root)/efi/SteamOS/conf
+    fi
+    if [ x$decksb_saved_root != x ]; then
+        set root=$decksb_saved_root
+    else
+        set root=
+    fi
+    if [ x$decksb_saved_prefix != x ]; then
+        set prefix=$decksb_saved_prefix
+    else
+        set prefix=
+    fi
+    if [ x$decksb_slot != x ]; then
+        if [ x$decksb_reason != x ]; then
+            echo "DeckSB: bootconf slot $decksb_slot ($decksb_reason)"
+        else
+            echo "DeckSB: bootconf slot $decksb_slot"
+        fi
+    else
+        echo "DeckSB: bootconf missing"
+    fi
+}
+
 function decksb_resolve_rootfs {
     set deck_rootfs_uuid=
     set deck_rootfs_a_uuid=
@@ -145,6 +205,7 @@ function decksb_resolve_rootfs {
     decksb_load_partset B
     decksb_load_partset all
     decksb_load_partset shared
+    decksb_load_bootconf
 
     if [ x$deck_rootfs_uuid != x ]; then
         echo "DeckSB: self rootfs $deck_rootfs_uuid"
@@ -162,7 +223,11 @@ function decksb_resolve_rootfs {
         echo "DeckSB: B rootfs missing"
     fi
 
-    if [ x$deck_rootfs_uuid != x ]; then
+    if [ x$decksb_slot = xA ] && [ x$deck_rootfs_a_uuid != x ]; then
+        set deck_rootfs_label=A
+    elif [ x$decksb_slot = xB ] && [ x$deck_rootfs_b_uuid != x ]; then
+        set deck_rootfs_label=B
+    elif [ x$deck_rootfs_uuid != x ]; then
         if [ x$deck_rootfs_uuid = x$deck_rootfs_a_uuid ]; then
             set deck_rootfs_label=A
         elif [ x$deck_rootfs_uuid = x$deck_rootfs_b_uuid ]; then

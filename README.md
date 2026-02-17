@@ -9,6 +9,9 @@ Arch-based live ISO for Enabling Secure Boot the Steam Deck (LCD and OLED)
 [![Download](https://img.shields.io/badge/Download-latest-brightgreen?style=for-the-badge&logo=github)](https://github.com/downthecrop/DeckSecureBoot/releases/latest)
 
 
+##########
+codex resume 019bcd47-6115-7092-b19f-3cc436c758aa
+
 ## Features
 
 - Easy to use menu on the Deck (D-Pad navigation)
@@ -211,7 +214,7 @@ docker run --rm -it \
   --platform=linux/amd64 \
   --privileged \
   -v $(pwd):/work \
-  -v $(pwd)/iso-out:/out \
+  -v $(pwd)/iso-out:/out \ (Change this to home)
   archlinux:base-20251221.0.472429 \
   /bin/bash
 
