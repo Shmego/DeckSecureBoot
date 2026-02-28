@@ -36,8 +36,10 @@ set color_special=light-cyan/black
 set color_title=cyan/black
 set color_border=cyan/black
 
-if [ -n "$grub_platform" ] && [ "$terminal_output" = "gfxterm" ]; then
-    echo 'Deck Secure Boot GRUB ready.'
+if [ -n "$grub_platform" ]; then
+    if [ "$terminal_output" = "gfxterm" ]; then
+        echo 'Deck Secure Boot GRUB ready.'
+    fi
 fi
 
 set menu_label='Deck Secure Boot Loader'
@@ -48,8 +50,7 @@ set d_cr=
 set d_rf_u=
 set d_ra_u=
 set d_rb_u=
-set d_ps_f=__DECK_SB_PARTSETS_HINT_FSUUID__
-set d_ps_p=__DECK_SB_PARTSETS_HINT_PATH__
+set d_ps_p=/SteamOS/partsets
 set d_lbl=
 set d_rdy=
 set d_pt=
@@ -74,6 +75,16 @@ set d_ar_e=
 set d_ar_v=
 set d_ar_h=
 set d_ar_s=
+set d_a_rq=
+set d_a_tm=
+set d_a_ct=
+set d_b_rq=
+set d_b_tm=
+set d_b_ct=
+set d_a_sf=
+set d_b_sf=
+set d_a_md=
+set d_b_md=
 set d_bn=
 
 function d_rf_set {
@@ -211,8 +222,8 @@ function d_try_psh {
     if [ x$1 = x ]; then
         return 1
     fi
-    set d_ps_p=$1
-    if search --no-floppy --file $d_ps_p/$d_pt --set=d_pr; then
+    if search --no-floppy --file $1/$d_pt --set=d_pr; then
+        set d_ps_p=$1
         if d_try_psr; then
             return 0
         fi
@@ -229,25 +240,10 @@ function d_ld_ps {
         echo "DeckSB: partset target missing"
         return
     fi
-    if [ x$d_ps_p = x ] || [ x$d_ps_p = x__DECK_SB_PARTSETS_HINT_PATH__ ]; then
+    if [ x$d_ps_p = x ]; then
         set d_ps_p=/SteamOS/partsets
     fi
-    if [ x$d_ps_f = x__DECK_SB_PARTSETS_HINT_FSUUID__ ]; then
-        set d_ps_f=
-    fi
     echo "DeckSB: trying partset target $d_pt"
-    if [ x$d_ps_f != x ]; then
-        echo "DeckSB: resolving partset device via fsuuid $d_ps_f"
-        if search --no-floppy --fs-uuid --set=d_pr $d_ps_f; then
-            echo "DeckSB: partset device $d_pr"
-            if d_try_psr; then
-                return
-            fi
-            echo "DeckSB: partset $d_pt parse failed on hinted device $d_pr"
-            return
-        fi
-        echo "DeckSB: hinted fsuuid not found $d_ps_f"
-    fi
     if d_try_psh $d_ps_p; then
         return
     fi
@@ -305,12 +301,71 @@ function d_ld_cf {
     else
         echo "DeckSB: bootconf missing"
     fi
+    if [ x$d_rs != x ]; then
+        echo "DeckSB: bootconf reason $d_rs"
+    fi
+    if [ x$d_a_sf = x ]; then
+        set d_a_sf_v=0
+    else
+        set d_a_sf_v=$d_a_sf
+    fi
+    if [ x$d_b_sf = x ]; then
+        set d_b_sf_v=0
+    else
+        set d_b_sf_v=$d_b_sf
+    fi
+    if [ x$d_a_md = x ]; then
+        set d_a_md_v=na
+    else
+        set d_a_md_v=$d_a_md
+    fi
+    if [ x$d_b_md = x ]; then
+        set d_b_md_v=na
+    else
+        set d_b_md_v=$d_b_md
+    fi
+    if [ x$d_a_rq = x ]; then
+        set d_a_rq_v=0
+    else
+        set d_a_rq_v=$d_a_rq
+    fi
+    if [ x$d_a_tm = x ]; then
+        set d_a_tm_v=0
+    else
+        set d_a_tm_v=$d_a_tm
+    fi
+    if [ x$d_a_ct = x ]; then
+        set d_a_ct_v=0
+    else
+        set d_a_ct_v=$d_a_ct
+    fi
+    if [ x$d_b_rq = x ]; then
+        set d_b_rq_v=0
+    else
+        set d_b_rq_v=$d_b_rq
+    fi
+    if [ x$d_b_tm = x ]; then
+        set d_b_tm_v=0
+    else
+        set d_b_tm_v=$d_b_tm
+    fi
+    if [ x$d_b_ct = x ]; then
+        set d_b_ct_v=0
+    else
+        set d_b_ct_v=$d_b_ct
+    fi
+    echo "DeckSB: conf A rq=$d_a_rq_v tm=$d_a_tm_v ct=$d_a_ct_v self=$d_a_sf_v mode=$d_a_md_v"
+    echo "DeckSB: conf B rq=$d_b_rq_v tm=$d_b_tm_v ct=$d_b_ct_v self=$d_b_sf_v mode=$d_b_md_v"
 }
 
 function d_res_rf {
+    if [ x$1 != xgo ]; then
+        return
+    fi
     if [ x$d_bn != x1 ]; then
         return
     fi
+    set d_bn=
     set d_rf_u=
     set d_ra_u=
     set d_rb_u=
@@ -376,10 +431,14 @@ function d_res_rf {
         echo "DeckSB: B rootfs missing"
     fi
 
-    if [ x$d_sl = xA ] && [ x$d_ra_u != x ]; then
-        set d_lbl=A
-    elif [ x$d_sl = xB ] && [ x$d_rb_u != x ]; then
-        set d_lbl=B
+    if [ x$d_sl = xA ]; then
+        if [ x$d_ra_u != x ]; then
+            set d_lbl=A
+        fi
+    elif [ x$d_sl = xB ]; then
+        if [ x$d_rb_u != x ]; then
+            set d_lbl=B
+        fi
     elif [ x$d_rf_u != x ]; then
         if [ x$d_rf_u = x$d_ra_u ]; then
             set d_lbl=A
@@ -486,10 +545,11 @@ menuentry 'SteamOS SB (shimless)' {
     # Force a repaint to the framebuffer
 
     insmod part_gpt
-    insmod search_fs_uuid
     insmod fat
     insmod btrfs
     insmod gzio
+    set d_bn=1
+    d_res_rf go
 __DECK_SB_KERNEL_BLOCK__
 }
 

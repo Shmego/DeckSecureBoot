@@ -612,7 +612,7 @@ write_cfg_to_custom_dir() {
   local custom_dir="$1"
   local grub_dev="$2"
   local cfg_path="$custom_dir/deck-sb.cfg"
-  local kernel_block dynamic_root_block
+  local kernel_block
 
   deck_dialog --infobox "Writing SteamOS boot config..." 5 70
 
@@ -626,13 +626,7 @@ write_cfg_to_custom_dir() {
     exit 1
   fi
 
-  dynamic_root_block=$(cat <<'EOF'
-    set d_bn=1
-    d_res_rf
-EOF
-)
-
-  local partsets_hint_fsuuid="" partsets_hint_path="/SteamOS/partsets"
+  local partsets_hint_path="/SteamOS/partsets"
   local partsets_dir="" esp_root="" partuuid_a="" partuuid_b="" partsets_source=""
   local partsets_mount=""
   local partsets_display_path="" partsets_display_source=""
@@ -679,12 +673,6 @@ EOF
   if [ -z "$partsets_hint_path" ]; then
     partsets_hint_path="/SteamOS/partsets"
   fi
-  if [ -n "$partsets_source" ]; then
-    partsets_hint_fsuuid=$(blkid -s UUID -o value "$partsets_source" 2>/dev/null | head -n1 || true)
-  fi
-  if [ -z "$partsets_hint_fsuuid" ] && [ -n "$grub_dev" ]; then
-    partsets_hint_fsuuid=$(blkid -s UUID -o value "$grub_dev" 2>/dev/null | head -n1 || true)
-  fi
   if [ -n "$partsets_dir" ]; then
     partsets_display_path=$(deck_display_path "$partsets_dir")
   else
@@ -695,7 +683,7 @@ EOF
   else
     partsets_display_source="(unknown)"
   fi
-  deck_dialog --msgbox "Partsets detection:\n\nDirectory: ${partsets_display_path}\nDevice: ${partsets_display_source}\nGRUB Path: ${partsets_hint_path}\nFS UUID: ${partsets_hint_fsuuid:-missing}" 13 90
+  deck_dialog --msgbox "Partsets detection:\n\nDirectory: ${partsets_display_path}\nDevice: ${partsets_display_source}\nGRUB Path: ${partsets_hint_path}" 12 90
   log_debug "esp root: $esp_root"
   if [ -n "$partsets_dir" ]; then
     partuuid_a=$(read_partset_rootfs_partuuid "$partsets_dir/A" 2>/dev/null || true)
@@ -703,10 +691,9 @@ EOF
   fi
   log_debug "rootfs partuuid: A=${partuuid_a:-missing} B=${partuuid_b:-missing}"
   log_debug "partsets path hint: ${partsets_hint_path}"
-  log_debug "partsets fsuuid hint: ${partsets_hint_fsuuid:-missing}"
+  log_debug "partsets source: ${partsets_source:-missing}"
 
   kernel_block=$(cat <<EOF
-$dynamic_root_block
     echo "DeckSB: root=\$root"
     echo "DeckSB: linux ${STEAMOS_KERNEL_IMAGE} console=tty1 rd.luks=0 rd.lvm=0 rd.md=0 rd.dm=0 rd.systemd.gpt_auto=no log_buf_len=4M amd_iommu=off amdgpu.lockup_timeout=5000,10000,10000,5000 ttm.pages_min=2097152 amdgpu.sched_hw_submission=4 audit=0 fsck.mode=auto fsck.repair=preen fbcon=rotate:1 ${STEAMOS_KERNEL_VERBOSITY} plymouth.ignore-serial-consoles fbcon=vc:4-6 noresume \$d_ar_r \$d_ar_e \$d_ar_v \$d_ar_h \$d_ar_s"
     echo "DeckSB: initrd ${STEAMOS_INITRD_IMAGES}"
@@ -760,11 +747,7 @@ EOF
 
   {
     while IFS= read -r line || [ -n "$line" ]; do
-      if [[ "$line" == *"__DECK_SB_PARTSETS_HINT_FSUUID__"* ]]; then
-        printf '%s\n' "${line//__DECK_SB_PARTSETS_HINT_FSUUID__/$partsets_hint_fsuuid}"
-      elif [[ "$line" == *"__DECK_SB_PARTSETS_HINT_PATH__"* ]]; then
-        printf '%s\n' "${line//__DECK_SB_PARTSETS_HINT_PATH__/$partsets_hint_path}"
-      elif [ "$line" = "__DECK_SB_KERNEL_BLOCK__" ]; then
+      if [ "$line" = "__DECK_SB_KERNEL_BLOCK__" ]; then
         printf '%s\n' "$kernel_block"
       else
         printf '%s\n' "$line"

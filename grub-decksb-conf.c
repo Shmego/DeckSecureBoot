@@ -40,6 +40,7 @@ struct d_ci
   grub_uint64_t boot_time;
   grub_uint64_t boot_count;
   int reboot_self;
+  char *mode;
   int valid;
 };
 
@@ -85,6 +86,15 @@ d_is_h (char c)
 {
   c = d_tol (c);
   return ((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'));
+}
+
+static int
+d_is_mc (char c)
+{
+  c = d_tol (c);
+  if ((c >= '0' && c <= '9') || (c >= 'a' && c <= 'z'))
+    return 1;
+  return (c == '-' || c == '_' || c == '.');
 }
 
 static int
@@ -243,6 +253,47 @@ d_uuid_ln (const char *line)
   return 0;
 }
 
+static char *
+d_mode_ln (const char *line)
+{
+  const char *needle = "bootconf mode:";
+  const char *p;
+  const char *start;
+  grub_size_t len;
+  grub_size_t i;
+  char *out;
+
+  if (!line)
+    return 0;
+
+  p = line;
+  while (*p)
+    {
+      if (d_sw_ci (p, needle))
+        {
+          p += 14;
+          p = skip_ws (p);
+          start = p;
+          while (*p && d_is_mc (*p))
+            p++;
+          len = (grub_size_t) (p - start);
+          if (!len)
+            return 0;
+
+          out = grub_malloc (len + 1);
+          if (!out)
+            return 0;
+          for (i = 0; i < len; i++)
+            out[i] = d_tol (start[i]);
+          out[len] = '\0';
+          return out;
+        }
+      p++;
+    }
+
+  return 0;
+}
+
 static void
 parse_conf_line (struct d_ci *info, const char *line)
 {
@@ -277,6 +328,8 @@ parse_conf_line (struct d_ci *info, const char *line)
       value = skip_ws (line + 8);
       if (value && grub_strstr (value, "reboot (self)"))
         info->reboot_self = 1;
+      if (!info->mode && value)
+        info->mode = d_mode_ln (value);
       return;
     }
 }
@@ -547,6 +600,23 @@ set_or_unset_env (const char *name, const char *value)
     grub_env_unset (name);
 }
 
+static void
+clr_cf_env (void)
+{
+  grub_env_unset ("d_sl");
+  grub_env_unset ("d_rs");
+  grub_env_unset ("d_a_rq");
+  grub_env_unset ("d_a_tm");
+  grub_env_unset ("d_a_ct");
+  grub_env_unset ("d_b_rq");
+  grub_env_unset ("d_b_tm");
+  grub_env_unset ("d_b_ct");
+  grub_env_unset ("d_a_sf");
+  grub_env_unset ("d_b_sf");
+  grub_env_unset ("d_a_md");
+  grub_env_unset ("d_b_md");
+}
+
 struct d_ru_ctx
 {
   const char *want;
@@ -738,6 +808,7 @@ grub_cmd_d_cf (grub_command_t cmd __attribute__ ((unused)),
   if (argc < 1)
     return grub_error (GRUB_ERR_BAD_ARGUMENT, "usage: d_cf <conf_dir>");
 
+  clr_cf_env ();
   grub_memset (&info_a, 0, sizeof (info_a));
   grub_memset (&info_b, 0, sizeof (info_b));
 
@@ -781,13 +852,22 @@ grub_cmd_d_cf (grub_command_t cmd __attribute__ ((unused)),
       set_u64_env ("d_a_rq", info_a.boot_requested_at);
       set_u64_env ("d_a_tm", info_a.boot_time);
       set_u64_env ("d_a_ct", info_a.boot_count);
+      if (info_a.reboot_self)
+        grub_env_set ("d_a_sf", "1");
+      set_or_unset_env ("d_a_md", info_a.mode);
     }
   if (info_b.valid)
     {
       set_u64_env ("d_b_rq", info_b.boot_requested_at);
       set_u64_env ("d_b_tm", info_b.boot_time);
       set_u64_env ("d_b_ct", info_b.boot_count);
+      if (info_b.reboot_self)
+        grub_env_set ("d_b_sf", "1");
+      set_or_unset_env ("d_b_md", info_b.mode);
     }
+
+  grub_free (info_a.mode);
+  grub_free (info_b.mode);
 
   return 0;
 }
