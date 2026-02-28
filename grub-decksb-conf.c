@@ -19,10 +19,14 @@
 
 #include <grub/dl.h>
 #include <grub/command.h>
+#include <grub/device.h>
+#include <grub/disk.h>
 #include <grub/env.h>
 #include <grub/file.h>
+#include <grub/gpt_partition.h>
 #include <grub/misc.h>
 #include <grub/mm.h>
+#include <grub/partition.h>
 #include <grub/types.h>
 
 GRUB_MOD_LICENSE ("GPLv3+");
@@ -543,6 +547,99 @@ set_or_unset_env (const char *name, const char *value)
     grub_env_unset (name);
 }
 
+struct d_ru_ctx
+{
+  const char *want;
+  char *found;
+};
+
+static int
+d_eq_uuid_ci (const char *a, const char *b)
+{
+  grub_size_t i;
+
+  if (!a || !b)
+    return 0;
+  if (!d_uuid_at (a) || !d_uuid_at (b))
+    return 0;
+
+  for (i = 0; i < 36; i++)
+    {
+      if (d_tol (a[i]) != d_tol (b[i]))
+        return 0;
+    }
+  return 1;
+}
+
+static int
+d_get_part_uuid (grub_device_t dev, char out[37])
+{
+  struct grub_partition *p;
+  grub_disk_t disk;
+  struct grub_gpt_partentry entry;
+  grub_guid_t guid;
+
+  if (!dev || !dev->disk || !dev->disk->partition || !out)
+    return 0;
+  if (!dev->disk->partition->partmap
+      || grub_strcmp (dev->disk->partition->partmap->name, "gpt") != 0)
+    return 0;
+
+  p = dev->disk->partition;
+  disk = grub_disk_open (dev->disk->name);
+  if (!disk)
+    return 0;
+
+  if (grub_disk_read (disk, p->offset, p->index, sizeof (entry), &entry))
+    {
+      grub_error_push ();
+      grub_disk_close (disk);
+      grub_error_pop ();
+      return 0;
+    }
+  grub_disk_close (disk);
+
+  guid = entry.guid;
+  guid.data1 = grub_le_to_cpu32 (guid.data1);
+  guid.data2 = grub_le_to_cpu16 (guid.data2);
+  guid.data3 = grub_le_to_cpu16 (guid.data3);
+  grub_snprintf (out, 37, "%pG", &guid);
+  return 1;
+}
+
+static int
+d_find_partuuid_iter (const char *name, void *data)
+{
+  struct d_ru_ctx *ctx = data;
+  grub_device_t dev;
+  char part_uuid[37];
+
+  if (!ctx || !ctx->want || !name || !name[0])
+    return 0;
+  if (ctx->found)
+    return 1;
+  if (!grub_strchr (name, ','))
+    return 0;
+
+  dev = grub_device_open (name);
+  if (!dev)
+    {
+      grub_errno = GRUB_ERR_NONE;
+      return 0;
+    }
+
+  if (d_get_part_uuid (dev, part_uuid) && d_eq_uuid_ci (ctx->want, part_uuid))
+    {
+      ctx->found = grub_strdup (name);
+      grub_device_close (dev);
+      return ctx->found ? 1 : 0;
+    }
+
+  grub_device_close (dev);
+  grub_errno = GRUB_ERR_NONE;
+  return 0;
+}
+
 static void
 clr_ps_env (void)
 {
@@ -586,6 +683,45 @@ grub_cmd_d_ps (grub_command_t cmd __attribute__ ((unused)),
   grub_free (info.home);
   grub_free (info.esp);
   return 0;
+}
+
+static grub_err_t
+grub_cmd_d_rr (grub_command_t cmd __attribute__ ((unused)),
+               int argc, char **args)
+{
+  struct d_ru_ctx ctx;
+  char *want;
+  const char *var = "root";
+
+  if (argc >= 2 && args[1] && args[1][0])
+    var = args[1];
+
+  if (argc < 1 || !args[0] || !args[0][0])
+    {
+      grub_env_unset (var);
+      return GRUB_ERR_NONE;
+    }
+
+  want = d_uuid_cp (args[0]);
+  if (!want)
+    {
+      grub_env_unset (var);
+      return GRUB_ERR_NONE;
+    }
+
+  ctx.want = want;
+  ctx.found = 0;
+  grub_device_iterate (d_find_partuuid_iter, &ctx);
+
+  if (ctx.found)
+    grub_env_set (var, ctx.found);
+  else
+    grub_env_unset (var);
+
+  grub_free (ctx.found);
+  grub_free (want);
+  grub_errno = GRUB_ERR_NONE;
+  return GRUB_ERR_NONE;
 }
 
 static grub_err_t
@@ -658,6 +794,7 @@ grub_cmd_d_cf (grub_command_t cmd __attribute__ ((unused)),
 
 static grub_command_t cmd_conf;
 static grub_command_t cmd_partset;
+static grub_command_t cmd_resolve_partuuid;
 
 GRUB_MOD_INIT(decksb_conf)
 {
@@ -667,10 +804,14 @@ GRUB_MOD_INIT(decksb_conf)
   cmd_partset = grub_register_command ("d_ps", grub_cmd_d_ps,
                                        N_("PARTSET_FILE"),
                                        N_("Parse SteamOS partset file and set d_ps_* vars."));
+  cmd_resolve_partuuid = grub_register_command ("d_rr", grub_cmd_d_rr,
+                                                N_("PARTUUID [VARNAME]"),
+                                                N_("Resolve PARTUUID to device and set VARNAME (default root)."));
 }
 
 GRUB_MOD_FINI(decksb_conf)
 {
   grub_unregister_command (cmd_conf);
   grub_unregister_command (cmd_partset);
+  grub_unregister_command (cmd_resolve_partuuid);
 }

@@ -212,42 +212,6 @@ read_partset_rootfs_partuuid() {
   read_partset_value "$file" "rootfs"
 }
 
-resolve_partuuid_to_fsuuid() {
-  local partuuid="$1"
-  local dev="" dev_candidate="" partuuid_lc uuid=""
-  [ -n "$partuuid" ] || return 1
-
-  uuid=$(blkid -t "PARTUUID=$partuuid" -s UUID -o value 2>/dev/null | head -n1 || true)
-  if [ -n "$uuid" ]; then
-    printf '%s\n' "$uuid"
-    return 0
-  fi
-  uuid=$(blkid -t "PARTUUID=${partuuid^^}" -s UUID -o value 2>/dev/null | head -n1 || true)
-  if [ -n "$uuid" ]; then
-    printf '%s\n' "$uuid"
-    return 0
-  fi
-
-  dev=$(readlink -f "/dev/disk/by-partuuid/$partuuid" 2>/dev/null || true)
-  if [ ! -b "$dev" ]; then
-    dev=$(readlink -f "/dev/disk/by-partuuid/${partuuid^^}" 2>/dev/null || true)
-  fi
-  if [ ! -b "$dev" ]; then
-    partuuid_lc="${partuuid,,}"
-    while read -r dev_candidate blk_partuuid; do
-      [ -n "$dev_candidate" ] || continue
-      [ -n "$blk_partuuid" ] || continue
-      if [ "${blk_partuuid,,}" = "$partuuid_lc" ]; then
-        dev="$dev_candidate"
-        break
-      fi
-    done < <(lsblk -rpno NAME,PARTUUID 2>/dev/null || true)
-  fi
-  [ -b "$dev" ] || return 1
-
-  blkid -s UUID -o value "$dev" 2>/dev/null || true
-}
-
 find_partsets_for_custom_dir() {
   local custom_dir="$1"
   local esp_root=""
@@ -668,7 +632,6 @@ write_cfg_to_custom_dir() {
 EOF
 )
 
-  local rootfs_a_fsuuid="" rootfs_b_fsuuid=""
   local partsets_hint_fsuuid="" partsets_hint_path="/SteamOS/partsets"
   local partsets_dir="" esp_root="" partuuid_a="" partuuid_b="" partsets_source=""
   local partsets_mount=""
@@ -710,6 +673,12 @@ EOF
   if [[ "$partsets_hint_path" != /* ]]; then
     partsets_hint_path="/$partsets_hint_path"
   fi
+  if [ "$partsets_hint_path" != "/" ]; then
+    partsets_hint_path="${partsets_hint_path%/}"
+  fi
+  if [ -z "$partsets_hint_path" ]; then
+    partsets_hint_path="/SteamOS/partsets"
+  fi
   if [ -n "$partsets_source" ]; then
     partsets_hint_fsuuid=$(blkid -s UUID -o value "$partsets_source" 2>/dev/null | head -n1 || true)
   fi
@@ -731,15 +700,8 @@ EOF
   if [ -n "$partsets_dir" ]; then
     partuuid_a=$(read_partset_rootfs_partuuid "$partsets_dir/A" 2>/dev/null || true)
     partuuid_b=$(read_partset_rootfs_partuuid "$partsets_dir/B" 2>/dev/null || true)
-    if [ -n "$partuuid_a" ]; then
-      rootfs_a_fsuuid=$(resolve_partuuid_to_fsuuid "$partuuid_a" 2>/dev/null || true)
-    fi
-    if [ -n "$partuuid_b" ]; then
-      rootfs_b_fsuuid=$(resolve_partuuid_to_fsuuid "$partuuid_b" 2>/dev/null || true)
-    fi
   fi
   log_debug "rootfs partuuid: A=${partuuid_a:-missing} B=${partuuid_b:-missing}"
-  log_debug "rootfs fsuuid: A=${rootfs_a_fsuuid:-missing} B=${rootfs_b_fsuuid:-missing}"
   log_debug "partsets path hint: ${partsets_hint_path}"
   log_debug "partsets fsuuid hint: ${partsets_hint_fsuuid:-missing}"
 
@@ -798,11 +760,7 @@ EOF
 
   {
     while IFS= read -r line || [ -n "$line" ]; do
-      if [[ "$line" == *"__DECK_SB_ROOTFS_A_FSUUID__"* ]]; then
-        printf '%s\n' "${line//__DECK_SB_ROOTFS_A_FSUUID__/$rootfs_a_fsuuid}"
-      elif [[ "$line" == *"__DECK_SB_ROOTFS_B_FSUUID__"* ]]; then
-        printf '%s\n' "${line//__DECK_SB_ROOTFS_B_FSUUID__/$rootfs_b_fsuuid}"
-      elif [[ "$line" == *"__DECK_SB_PARTSETS_HINT_FSUUID__"* ]]; then
+      if [[ "$line" == *"__DECK_SB_PARTSETS_HINT_FSUUID__"* ]]; then
         printf '%s\n' "${line//__DECK_SB_PARTSETS_HINT_FSUUID__/$partsets_hint_fsuuid}"
       elif [[ "$line" == *"__DECK_SB_PARTSETS_HINT_PATH__"* ]]; then
         printf '%s\n' "${line//__DECK_SB_PARTSETS_HINT_PATH__/$partsets_hint_path}"
