@@ -4,7 +4,7 @@ set -euo pipefail
 # shellcheck disable=SC1091
 . /root/deck-env.sh
 
-EMPTY=" "
+EMPTY=""
 BACKTITLE="${DECK_SB_BACKTITLE}"
 ISO_RELATIVE_PATH="/usr/local/share/deck-sb"
 ISO_VOLUME_LABEL="${DECK_SB_ISO_LABEL:-DECK_SB}"

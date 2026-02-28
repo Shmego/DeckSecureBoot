@@ -6,13 +6,8 @@ export DIALOGRC=/etc/dialogrc
 . /root/deck-env.sh
 
 BACKTITLE="${DECK_SB_BACKTITLE}"
-PENDING_FLAG="${DECK_SB_PENDING_FLAG}"
 ISO_DEBUG_LOG="$DECK_SB_DEBUG_LOG"
 SHOW_LOG_MENU="${DECK_SB_DEBUG:-0}"
-
-pending_flag() {
-  [ -f "$PENDING_FLAG" ] && echo " (pending reboot)" || echo ""
-}
 
 open_shell() {
   hostname deck-sb 2>/dev/null || true
@@ -56,7 +51,7 @@ run_menu_action() {
 }
 
 while true; do
-  PEND=$(pending_flag)
+  PEND=$(sb_pending_suffix)
   JUMP_LABEL="Install Deck SB Jump Loader"
   if /root/deck-install-jump.sh --detect-installed >/dev/null 2>&1; then
     JUMP_LABEL="Reinstall/Remove Deck SB Jump Loader"

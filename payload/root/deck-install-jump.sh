@@ -17,13 +17,11 @@ DEFAULT_INITRD_IMAGES="/boot/amd-ucode.img /boot/initramfs-linux-neptune-611.img
 STEAMOS_KERNEL_IMAGE="$DEFAULT_KERNEL_IMAGE"
 STEAMOS_INITRD_IMAGES="$DEFAULT_INITRD_IMAGES"
 STEAMOS_KERNEL_VERBOSITY="loglevel=3 quiet splash"
-STEAMOS_ROOT_UUID=""
-STEAMOS_ROOT_SEARCH_CMD=""
 BOOT_LABELS=("$NEW_EFI_LABEL" "$OLD_EFI_LABEL")
 
-ISO_MOUNT="/run/archiso/bootmnt"
-TMP_EFI_MOUNT_BASE="/run/deck-efi"
-TMP_LINUX_MOUNT_BASE="/run/deck-root"
+ISO_MOUNT="${DECK_SB_ISO_MOUNT}"
+TMP_EFI_MOUNT_BASE="${DECK_SB_TMP_EFI_MOUNT_BASE}"
+TMP_LINUX_MOUNT_BASE="${DECK_SB_TMP_LINUX_MOUNT_BASE}"
 JUMP_STATE_FILE="${DECK_SB_JUMP_STATE_FILE:-/run/deck-sb/jump.state}"
 
 LINUX_FSTYPES='ext2|ext3|ext4|btrfs|xfs|f2fs'
@@ -42,10 +40,6 @@ mkdir -p "$TMP_EFI_MOUNT_BASE" "$TMP_LINUX_MOUNT_BASE"
 cleanup() {
   cleanup_mounts TEMP_MOUNTS
 }
-display_path() {
-  format_display_path "$1" "$TMP_EFI_MOUNT_BASE" "$TMP_LINUX_MOUNT_BASE"
-}
-log_debug() { sb_log "$1"; }
 
 clean_source_path() {
   local src="$1"
@@ -122,91 +116,6 @@ parse_kernel_initrd_from_cfg() {
   return 0
 }
 
-parse_root_search_from_cfg() {
-  local cfg="$1"
-  [ -f "$cfg" ] || return 1
-
-  local line
-  line=$(awk '
-    $1 == "search" {
-      for (i = 1; i <= NF; i++) {
-        if ($i == "--set=root") {
-          print
-          exit
-        }
-        if ($i == "--set" && $(i + 1) == "root") {
-          print
-          exit
-        }
-      }
-    }
-  ' "$cfg" 2>/dev/null || true)
-  line=$(trim_config_value "$line")
-  if [ -n "$line" ]; then
-    STEAMOS_ROOT_SEARCH_CMD="$line"
-    return 0
-  fi
-  return 1
-}
-
-parse_root_uuid_from_cfg() {
-  local cfg="$1"
-  [ -f "$cfg" ] || return 1
-
-  local uuid
-  uuid=$(awk '
-    {
-      for (i = 1; i <= NF; i++) {
-        if ($i ~ /^--fs-uuid=/) {
-          sub(/^--fs-uuid=/, "", $i)
-          print $i
-          exit
-        }
-        if ($i == "--fs-uuid") {
-          for (j = i + 1; j <= NF; j++) {
-            if ($j !~ /^--/) {
-              print $j
-              exit
-            }
-          }
-        }
-      }
-    }
-  ' "$cfg" 2>/dev/null || true)
-  uuid=$(trim_config_value "$uuid")
-  if [ -n "$uuid" ]; then
-    STEAMOS_ROOT_UUID="$uuid"
-    return 0
-  fi
-
-  uuid=$(awk '
-    {
-      for (i = 1; i <= NF; i++) {
-        if ($i ~ /^root=UUID=/) {
-          sub(/^root=UUID=/, "", $i)
-          print $i
-          exit
-        }
-      }
-    }
-  ' "$cfg" 2>/dev/null || true)
-  uuid=$(trim_config_value "$uuid")
-  if [ -n "$uuid" ]; then
-    STEAMOS_ROOT_UUID="$uuid"
-    return 0
-  fi
-  return 1
-}
-
-parse_root_hint_from_cfg() {
-  local cfg="$1"
-  STEAMOS_ROOT_SEARCH_CMD=""
-  STEAMOS_ROOT_UUID=""
-  parse_root_search_from_cfg "$cfg" && return 0
-  parse_root_uuid_from_cfg "$cfg" && return 0
-  return 1
-}
-
 find_partsets_dir() {
   local base="$1"
   local rel
@@ -218,9 +127,9 @@ find_partsets_dir() {
   done
   if command -v find >/dev/null 2>&1; then
     local found
-    found=$(find "$base" -maxdepth 4 -type d -path '*/SteamOS/partsets' -print -quit 2>/dev/null || true)
+    found=$(find "$base" -maxdepth 8 -type f -path '*/SteamOS/partsets/self' -print -quit 2>/dev/null || true)
     if [ -n "$found" ]; then
-      printf '%s\n' "$found"
+      printf '%s\n' "$(dirname "$found")"
       return 0
     fi
   fi
@@ -229,31 +138,72 @@ find_partsets_dir() {
 
 read_partset_value() {
   local file="$1" key="$2"
+  local value=""
   [ -f "$file" ] || return 1
 
-  awk -v key="$key" '
-BEGIN { IGNORECASE = 1 }
-{
-  line = $0
-  sub(/\r$/, "", line)
-  sub(/[[:space:]]+#.*$/, "", line)
-  if (line ~ /^[[:space:]]*$/) next
-  if (line ~ /^[[:space:]]*#/) next
-  if (match(line, "^[[:space:]]*" key "[[:space:]]*[:=][[:space:]]*(.+)$", m) ||
-      match(line, "^[[:space:]]*" key "[[:space:]]+(.+)$", m)) {
-    val = m[1]
-    gsub(/^[[:space:]]+|[[:space:]]+$/, "", val)
-    gsub(/^\"|\"$/, "", val)
-    val_lc = tolower(val)
-    if (match(val_lc, /partuuid=([a-f0-9-]+)/, mm)) { print mm[1]; exit }
-    if (match(val_lc, /uuid=([a-f0-9-]+)/, mm)) { print mm[1]; exit }
-    if (match(val_lc, /by-partuuid\/([a-f0-9-]+)/, mm)) { print mm[1]; exit }
-    split(val, tok, /[[:space:]]+/)
-    print tok[1]
-    exit
+  value=$(awk -v key="$key" '
+function is_hex_uuid(v, parts, n) {
+  if (length(v) != 36) return 0
+  if (v !~ /^[0-9a-f-]+$/) return 0
+  n = split(v, parts, "-")
+  if (n != 5) return 0
+  if (length(parts[1]) != 8) return 0
+  if (length(parts[2]) != 4) return 0
+  if (length(parts[3]) != 4) return 0
+  if (length(parts[4]) != 4) return 0
+  if (length(parts[5]) != 12) return 0
+  return 1
+}
+
+function emit_if_uuid(v) {
+  gsub(/^[^0-9A-Fa-f-]+/, "", v)
+  gsub(/[^0-9A-Fa-f-]+$/, "", v)
+  v = tolower(v)
+  if (is_hex_uuid(v)) {
+    print v
+    found = 1
   }
 }
-' "$file" 2>/dev/null
+
+BEGIN {
+  key = tolower(key)
+}
+
+{
+  if (found) next
+  line = $0
+  sub(/\r$/, "", line)
+  if (line ~ /^[[:space:]]*#/) next
+  sub(/[[:space:]]+#.*$/, "", line)
+  if (line ~ /^[[:space:]]*$/) next
+
+  line_lc = tolower(line)
+  if (line_lc !~ ("(^|[^[:alnum:]_])" key "([^[:alnum:]_]|$)")) next
+
+  if (match(line_lc, /partuuid=[^[:space:]\",;]+/)) {
+    emit_if_uuid(substr(line_lc, RSTART + 9, RLENGTH - 9))
+    if (found) exit
+  }
+  if (match(line_lc, /by-partuuid\/[^[:space:]\",;]+/)) {
+    emit_if_uuid(substr(line_lc, RSTART + 12, RLENGTH - 12))
+    if (found) exit
+  }
+  if (match(line_lc, /uuid=[^[:space:]\",;]+/)) {
+    emit_if_uuid(substr(line_lc, RSTART + 5, RLENGTH - 5))
+    if (found) exit
+  }
+
+  count = split(line_lc, tokens, /[^0-9a-f-]+/)
+  for (i = 1; i <= count; i++) {
+    emit_if_uuid(tokens[i])
+    if (found) exit
+  }
+}
+' "$file" 2>/dev/null || true)
+
+  [ -n "$value" ] || return 1
+  printf '%s\n' "$value"
+  return 0
 }
 
 read_partset_rootfs_partuuid() {
@@ -311,6 +261,9 @@ find_partsets_for_custom_dir() {
   if [ -z "$partsets_dir" ] && [ -n "${TMP_EFI_MOUNT_BASE:-}" ]; then
     partsets_dir=$(find_partsets_dir "$TMP_EFI_MOUNT_BASE" 2>/dev/null || true)
   fi
+  if [ -z "$partsets_dir" ] && [ -n "${TMP_LINUX_MOUNT_BASE:-}" ]; then
+    partsets_dir=$(find_partsets_dir "$TMP_LINUX_MOUNT_BASE" 2>/dev/null || true)
+  fi
   if [ -n "$partsets_dir" ]; then
     log_debug "partsets: $partsets_dir"
   else
@@ -318,53 +271,6 @@ find_partsets_for_custom_dir() {
   fi
   printf '%s\n' "$partsets_dir"
   return 0
-}
-
-write_partset_cfg() {
-  local src="$1" dest="$2"
-  local rootfs="" efi="" var="" home="" esp=""
-
-  rootfs=$(read_partset_value "$src" "rootfs" || true)
-  efi=$(read_partset_value "$src" "efi" || true)
-  var=$(read_partset_value "$src" "var" || true)
-  home=$(read_partset_value "$src" "home" || true)
-  esp=$(read_partset_value "$src" "esp" || true)
-
-  if [ -z "$rootfs$efi$var$home$esp" ]; then
-    return 1
-  fi
-
-  {
-    echo "# auto-generated by deck-install-jump"
-    [ -n "$rootfs" ] && echo "rootfs $rootfs"
-    [ -n "$efi" ] && echo "efi $efi"
-    [ -n "$var" ] && echo "var $var"
-    [ -n "$home" ] && echo "home $home"
-    [ -n "$esp" ] && echo "esp $esp"
-  } > "$dest"
-  chmod 0644 "$dest" 2>/dev/null || true
-  return 0
-}
-
-write_decksb_partsets() {
-  local custom_dir="$1" partsets_dir="$2"
-  [ -n "$partsets_dir" ] || return 0
-
-  local out_dir="$custom_dir/partsets"
-  mkdir -p "$out_dir" 2>/dev/null || true
-
-  local name src dest
-  for name in self A B all shared; do
-    src="$partsets_dir/$name"
-    [ -f "$src" ] || continue
-    dest="$out_dir/$name"
-    if write_partset_cfg "$src" "$dest"; then
-      log_debug "partsets: wrote $(display_path "$dest")"
-    else
-      log_debug "partsets: skipped $(display_path "$src") (no parsable entries)"
-      rm -f "$dest" 2>/dev/null || true
-    fi
-  done
 }
 
 find_esp_root_for_custom_dir() {
@@ -650,22 +556,19 @@ update_kernel_initrd_from_grub() {
   if [ -z "$cfg" ]; then
     STEAMOS_KERNEL_IMAGE="$DEFAULT_KERNEL_IMAGE"
     STEAMOS_INITRD_IMAGES="$DEFAULT_INITRD_IMAGES"
-    STEAMOS_ROOT_SEARCH_CMD=""
-    STEAMOS_ROOT_UUID=""
     deck_dialog --msgbox "SteamOS grub.cfg was not found near the selected loader (e.g. steamos/grubx64.efi).\nUsing default kernel/initrd paths instead." 12 80
     return 1
   fi
 
-  deck_dialog --infobox "Parsing kernel/initrd settings from $(display_path "$cfg")..." 6 70
-  parse_root_hint_from_cfg "$cfg" || true
+  deck_dialog --infobox "Parsing kernel/initrd settings from $(deck_display_path "$cfg")..." 6 70
   if parse_kernel_initrd_from_cfg "$cfg"; then
-    deck_dialog --msgbox "Kernel/initrd paths captured from $(display_path "$cfg")." 8 80
+    deck_dialog --msgbox "Kernel/initrd paths captured from $(deck_display_path "$cfg")." 8 80
     return 0
   fi
 
   STEAMOS_KERNEL_IMAGE="$DEFAULT_KERNEL_IMAGE"
   STEAMOS_INITRD_IMAGES="$DEFAULT_INITRD_IMAGES"
-  deck_dialog --msgbox "Could not parse kernel/initrd data from $(display_path "$cfg").\nUsing default kernel/initrd paths instead." 12 80
+  deck_dialog --msgbox "Could not parse kernel/initrd data from $(deck_display_path "$cfg").\nUsing default kernel/initrd paths instead." 12 80
   return 1
 }
 
@@ -715,7 +618,7 @@ select_base_candidate() {
   local menu=()
   local idx=1
   for cand in "${BASE_CANDIDATES[@]}"; do
-    menu+=("$idx" "SteamOS base :: $(display_path "$cand")")
+    menu+=("$idx" "SteamOS base :: $(deck_display_path "$cand")")
     idx=$((idx + 1))
   done
 
@@ -760,13 +663,16 @@ write_cfg_to_custom_dir() {
   fi
 
   dynamic_root_block=$(cat <<'EOF'
-    decksb_resolve_rootfs
+    set d_bn=1
+    d_res_rf
 EOF
 )
 
-  local root_uuid="" root_search_line=""
   local rootfs_a_fsuuid="" rootfs_b_fsuuid=""
+  local partsets_hint_fsuuid="" partsets_hint_path="/SteamOS/partsets"
   local partsets_dir="" esp_root="" partuuid_a="" partuuid_b="" partsets_source=""
+  local partsets_mount=""
+  local partsets_display_path="" partsets_display_source=""
 
   esp_root=$(findmnt -rno TARGET -T "$custom_dir" 2>/dev/null || true)
   if [ -z "$esp_root" ]; then
@@ -776,6 +682,7 @@ EOF
   if [ -n "$partsets_dir" ]; then
     partsets_source=$(findmnt -rno SOURCE -T "$partsets_dir" 2>/dev/null || true)
     partsets_source=$(clean_source_path "$partsets_source")
+    partsets_mount=$(findmnt -rno TARGET -T "$partsets_dir" 2>/dev/null || true)
     if [ -n "$partsets_source" ] && [ -n "$grub_dev" ] && [ "$partsets_source" != "$grub_dev" ]; then
       log_debug "partsets: source $partsets_source != grub_dev $grub_dev (continuing)"
     fi
@@ -788,11 +695,38 @@ EOF
     else
       log_debug "partsets: ignoring $partsets_dir (outside esp root and $TMP_EFI_MOUNT_BASE)"
       partsets_dir=""
+      partsets_source=""
+      partsets_mount=""
     fi
   fi
-  if [ -n "$partsets_dir" ]; then
-    write_decksb_partsets "$custom_dir" "$partsets_dir"
+  if [ -n "$partsets_dir" ] && [ -n "$partsets_mount" ]; then
+    if [[ "$partsets_dir" == "$partsets_mount"* ]]; then
+      partsets_hint_path="${partsets_dir#$partsets_mount}"
+    fi
   fi
+  if [ -z "$partsets_hint_path" ]; then
+    partsets_hint_path="/SteamOS/partsets"
+  fi
+  if [[ "$partsets_hint_path" != /* ]]; then
+    partsets_hint_path="/$partsets_hint_path"
+  fi
+  if [ -n "$partsets_source" ]; then
+    partsets_hint_fsuuid=$(blkid -s UUID -o value "$partsets_source" 2>/dev/null | head -n1 || true)
+  fi
+  if [ -z "$partsets_hint_fsuuid" ] && [ -n "$grub_dev" ]; then
+    partsets_hint_fsuuid=$(blkid -s UUID -o value "$grub_dev" 2>/dev/null | head -n1 || true)
+  fi
+  if [ -n "$partsets_dir" ]; then
+    partsets_display_path=$(deck_display_path "$partsets_dir")
+  else
+    partsets_display_path="(not found)"
+  fi
+  if [ -n "$partsets_source" ]; then
+    partsets_display_source="$partsets_source"
+  else
+    partsets_display_source="(unknown)"
+  fi
+  deck_dialog --msgbox "Partsets detection:\n\nDirectory: ${partsets_display_path}\nDevice: ${partsets_display_source}\nGRUB Path: ${partsets_hint_path}\nFS UUID: ${partsets_hint_fsuuid:-missing}" 13 90
   log_debug "esp root: $esp_root"
   if [ -n "$partsets_dir" ]; then
     partuuid_a=$(read_partset_rootfs_partuuid "$partsets_dir/A" 2>/dev/null || true)
@@ -806,40 +740,13 @@ EOF
   fi
   log_debug "rootfs partuuid: A=${partuuid_a:-missing} B=${partuuid_b:-missing}"
   log_debug "rootfs fsuuid: A=${rootfs_a_fsuuid:-missing} B=${rootfs_b_fsuuid:-missing}"
+  log_debug "partsets path hint: ${partsets_hint_path}"
+  log_debug "partsets fsuuid hint: ${partsets_hint_fsuuid:-missing}"
 
-  if [ -n "$STEAMOS_ROOT_SEARCH_CMD" ]; then
-    root_search_line="    $STEAMOS_ROOT_SEARCH_CMD"
-  else
-    if [ -n "$STEAMOS_ROOT_UUID" ]; then
-      root_uuid="$STEAMOS_ROOT_UUID"
-    else
-      local disk
-      disk=$(lsblk -nrpo PKNAME "$grub_dev" 2>/dev/null | head -n1)
-      [[ "$disk" != /dev/* ]] && disk="/dev/$disk"
-
-      while read -r name fstype pkname; do
-        [[ "$pkname" != "$disk" ]] && continue
-        [[ "$name" == "$grub_dev" ]] && continue
-        fstype=${fstype,,}
-        if [[ "$fstype" == "btrfs" || "$fstype" == "ext4" ]]; then
-          root_uuid=$(blkid -s UUID -o value "$name" 2>/dev/null || true)
-          [ -n "$root_uuid" ] && break
-        fi
-      done < <(lsblk -rpno NAME,FSTYPE,PKNAME)
-    fi
-    if [ -n "$root_uuid" ]; then
-      root_search_line="    search --no-floppy --fs-uuid --set=root $root_uuid"
-    fi
-  fi
-
-  if [ -n "$root_search_line" ]; then
-    kernel_block=$(cat <<EOF
+  kernel_block=$(cat <<EOF
 $dynamic_root_block
-    if [ -z "\$deck_rootfs_ready" ]; then
-$root_search_line
-    fi
     echo "DeckSB: root=\$root"
-    echo "DeckSB: linux ${STEAMOS_KERNEL_IMAGE} console=tty1 rd.luks=0 rd.lvm=0 rd.md=0 rd.dm=0 rd.systemd.gpt_auto=no log_buf_len=4M amd_iommu=off amdgpu.lockup_timeout=5000,10000,10000,5000 ttm.pages_min=2097152 amdgpu.sched_hw_submission=4 audit=0 fsck.mode=auto fsck.repair=preen fbcon=rotate:1 ${STEAMOS_KERNEL_VERBOSITY} plymouth.ignore-serial-consoles fbcon=vc:4-6 noresume \$deck_root_arg \$deck_efi_arg \$deck_var_arg \$deck_home_arg \$deck_esp_arg"
+    echo "DeckSB: linux ${STEAMOS_KERNEL_IMAGE} console=tty1 rd.luks=0 rd.lvm=0 rd.md=0 rd.dm=0 rd.systemd.gpt_auto=no log_buf_len=4M amd_iommu=off amdgpu.lockup_timeout=5000,10000,10000,5000 ttm.pages_min=2097152 amdgpu.sched_hw_submission=4 audit=0 fsck.mode=auto fsck.repair=preen fbcon=rotate:1 ${STEAMOS_KERNEL_VERBOSITY} plymouth.ignore-serial-consoles fbcon=vc:4-6 noresume \$d_ar_r \$d_ar_e \$d_ar_v \$d_ar_h \$d_ar_s"
     echo "DeckSB: initrd ${STEAMOS_INITRD_IMAGES}"
     if [ -n "\$root" ]; then
         if [ -f "(\$root)${STEAMOS_KERNEL_IMAGE}" ]; then
@@ -874,7 +781,7 @@ $root_search_line
         plymouth.ignore-serial-consoles \
         fbcon=vc:4-6 \
         noresume \
-        \$deck_root_arg \$deck_efi_arg \$deck_var_arg \$deck_home_arg \$deck_esp_arg; then
+        \$d_ar_r \$d_ar_e \$d_ar_v \$d_ar_h \$d_ar_s; then
         if initrd ${STEAMOS_INITRD_IMAGES}; then
             boot
         else
@@ -888,63 +795,19 @@ $root_search_line
     fi
 EOF
 )
-  else
-    kernel_block=$(cat <<EOF
-$dynamic_root_block
-    echo "DeckSB: root=\$root"
-    echo "DeckSB: linux ${STEAMOS_KERNEL_IMAGE} console=tty1 rd.systemd.gpt_auto=no log_buf_len=4M audit=0 fbcon=rotate:1 ${STEAMOS_KERNEL_VERBOSITY} plymouth.ignore-serial-consoles fbcon=vc:4-6 noresume \$deck_root_arg \$deck_efi_arg \$deck_var_arg \$deck_home_arg \$deck_esp_arg"
-    echo "DeckSB: initrd ${STEAMOS_INITRD_IMAGES}"
-    if [ -n "\$root" ]; then
-        if [ -f "(\$root)${STEAMOS_KERNEL_IMAGE}" ]; then
-            echo "DeckSB: kernel ok ${STEAMOS_KERNEL_IMAGE}"
-        else
-            echo "DeckSB: kernel missing ${STEAMOS_KERNEL_IMAGE}"
-            ls (\$root)/boot/
-        fi
-        for deck_initrd in ${STEAMOS_INITRD_IMAGES}; do
-            if [ -f "(\$root)\$deck_initrd" ]; then
-                echo "DeckSB: initrd ok \$deck_initrd"
-            else
-                echo "DeckSB: initrd missing \$deck_initrd"
-            fi
-        done
-    else
-        echo "DeckSB: root not set"
-    fi
-    if linux ${STEAMOS_KERNEL_IMAGE} \
-        console=tty1 \
-        rd.systemd.gpt_auto=no \
-        log_buf_len=4M \
-        audit=0 \
-        fbcon=rotate:1 \
-        ${STEAMOS_KERNEL_VERBOSITY} \
-        plymouth.ignore-serial-consoles \
-        fbcon=vc:4-6 \
-        noresume \
-        \$deck_root_arg \$deck_efi_arg \$deck_var_arg \$deck_home_arg \$deck_esp_arg; then
-        if initrd ${STEAMOS_INITRD_IMAGES}; then
-            boot
-        else
-            echo "DeckSB: initrd load failed. Re-run the EFI installer to refresh SteamOS boot assets."
-            sleep 5
-        fi
-    else
-        echo "DeckSB: kernel load failed. The active kernel is unsigned."
-        echo "DeckSB: Re-run the EFI installer to sign all SteamOS kernels."
-        sleep 5
-    fi
-EOF
-)
-  fi
 
   {
     while IFS= read -r line || [ -n "$line" ]; do
-      if [ "$line" = "__DECK_SB_KERNEL_BLOCK__" ]; then
-        printf '%s\n' "$kernel_block"
-      elif [[ "$line" == *"__DECK_SB_ROOTFS_A_FSUUID__"* ]]; then
+      if [[ "$line" == *"__DECK_SB_ROOTFS_A_FSUUID__"* ]]; then
         printf '%s\n' "${line//__DECK_SB_ROOTFS_A_FSUUID__/$rootfs_a_fsuuid}"
       elif [[ "$line" == *"__DECK_SB_ROOTFS_B_FSUUID__"* ]]; then
         printf '%s\n' "${line//__DECK_SB_ROOTFS_B_FSUUID__/$rootfs_b_fsuuid}"
+      elif [[ "$line" == *"__DECK_SB_PARTSETS_HINT_FSUUID__"* ]]; then
+        printf '%s\n' "${line//__DECK_SB_PARTSETS_HINT_FSUUID__/$partsets_hint_fsuuid}"
+      elif [[ "$line" == *"__DECK_SB_PARTSETS_HINT_PATH__"* ]]; then
+        printf '%s\n' "${line//__DECK_SB_PARTSETS_HINT_PATH__/$partsets_hint_path}"
+      elif [ "$line" = "__DECK_SB_KERNEL_BLOCK__" ]; then
+        printf '%s\n' "$kernel_block"
       else
         printf '%s\n' "$line"
       fi
@@ -981,7 +844,7 @@ maybe_update_clover_config() {
   config_path="$clover_dir/config.plist"
 
   if [ ! -f "$CLOVER_ENTRY_TEMPLATE" ]; then
-    deck_dialog --msgbox "Clover directory detected at $(display_path "$clover_dir"), but the entry template is missing." 10 80
+    deck_dialog --msgbox "Clover directory detected at $(deck_display_path "$clover_dir"), but the entry template is missing." 10 80
     return 0
   fi
 
@@ -992,7 +855,7 @@ maybe_update_clover_config() {
   deck_dialog --infobox "Adding SteamOS Jump Loader to Clover config..." 5 70
   local tmp_file
   tmp_file=$(mktemp) || {
-    sb_error "Failed to create temporary file while editing $(display_path "$config_path")." 10 80
+    sb_error "Failed to create temporary file while editing $(deck_display_path "$config_path")." 10 80
     return 1
   }
 
@@ -1022,7 +885,7 @@ END {
 }
 ' "$config_path" > "$tmp_file"; then
     if mv "$tmp_file" "$config_path"; then
-      local clover_message="Clover config found at $(display_path "$config_path").\\nA SteamOS Jump Loader entry was added to the top of its boot menu."
+      local clover_message="Clover config found at $(deck_display_path "$config_path").\\nA SteamOS Jump Loader entry was added to the top of its boot menu."
 
       if grep -q '<key>DefaultLoader</key>' "$config_path" 2>/dev/null; then
         tmp_dloader=$(mktemp)
@@ -1058,7 +921,7 @@ END { exit updated ? 0 : 1 }
   fi
 
   rm -f "$tmp_file" 2>/dev/null || true
-  sb_error "Failed to update Clover config at $(display_path "$config_path"). Add the SteamOS Jump Loader entry manually." 10 80
+  sb_error "Failed to update Clover config at $(deck_display_path "$config_path"). Add the SteamOS Jump Loader entry manually." 10 80
   return 1
 }
 
@@ -1067,7 +930,7 @@ confirm_overwrite() {
   if [ ! -f "$path" ]; then
     return 0
   fi
-  deck_dialog --yesno "$(basename "$path") already exists at $(display_path "$path").\nOverwrite it?" 10 70
+  deck_dialog --yesno "$(basename "$path") already exists at $(deck_display_path "$path").\nOverwrite it?" 10 70
 }
 
 purge_existing_boot_entries() {
@@ -1136,14 +999,14 @@ install_jump_loader() {
   fi
 
   if ! output=$(install -m 0644 "$JUMP_SOURCE" "$custom_jump" 2>&1); then
-    sb_error "Failed to copy jump loader to $(display_path "$custom_jump").\n\n$output" 12 80
+    sb_error "Failed to copy jump loader to $(deck_display_path "$custom_jump").\n\n$output" 12 80
     exit 1
   fi
   if ! output=$(install -m 0644 "$PNG_SOURCE" "$bootpng" 2>&1); then
-    sb_error "Failed to copy boot image to $(display_path "$bootpng").\n\n$output" 12 80
+    sb_error "Failed to copy boot image to $(deck_display_path "$bootpng").\n\n$output" 12 80
     exit 1
   fi
-  deck_dialog --msgbox "Copied jump loader to $(display_path "$custom_jump")." 8 80
+  deck_dialog --msgbox "Copied jump loader to $(deck_display_path "$custom_jump")." 8 80
 
   write_cfg_to_custom_dir "$custom_dir" "$grub_source"
   maybe_update_clover_config "$custom_dir"
@@ -1166,7 +1029,7 @@ install_jump_loader() {
 
   deck_dialog --infobox "Adding UEFI boot entry..." 5 70
   if ! output=$(efibootmgr -c -d "$disk" -p "$partnum" -l "$efi_rel_path" -L "$NEW_EFI_LABEL" 2>&1); then
-    sb_report "UEFI boot entry not updated" "efibootmgr failed:\n$output\n\nThe jump loader was still installed at $(display_path "$custom_jump"). You can add a boot entry manually or use Boot From File." 18 90
+    sb_report "UEFI boot entry not updated" "efibootmgr failed:\n$output\n\nThe jump loader was still installed at $(deck_display_path "$custom_jump"). You can add a boot entry manually or use Boot From File." 18 90
     record_jump_state "$custom_jump"
     LAST_INSTALLED_JUMP="$custom_jump"
     return 0
@@ -1237,7 +1100,7 @@ remove_jump_loader() {
 
   local mp; mp=$(findmnt -rno TARGET -T "$jump_path" 2>/dev/null || true)
   if [ -n "$mp" ] && ! ensure_rw_mount "$mp"; then
-    sb_error "Cannot obtain write access to $(display_path "$mp")." 9 70
+    sb_error "Cannot obtain write access to $(deck_display_path "$mp")." 9 70
     return 1
   fi
 
@@ -1269,10 +1132,10 @@ sign_detected_kernels() {
   fi
 
   local summary="" success=0 already=0 failed=0
-  local kernel display RAW_OUTPUT STATUS OUTPUT
+  local kernel display
 
   for kernel in "${KERNEL_CANDIDATES[@]}"; do
-    display=$(display_path "$kernel")
+    display=$(deck_display_path "$kernel")
     if ! ERR=$(ensure_rw_for_path "$kernel"); then
       summary+="$display: SKIPPED (read-only)\n${ERR:-Unable to access target.}\n\n"
       failed=$((failed + 1))
@@ -1280,20 +1143,21 @@ sign_detected_kernels() {
     fi
 
     deck_dialog --infobox "Signing kernel:\n$display" 6 70
-    sbctl_sign_capture "$kernel"
-    STATUS=$SBCTL_STATUS
-    OUTPUT=$(printf '%s' "$SBCTL_RAW_OUTPUT" | sanitize_printable)
-
-    if [ $STATUS -eq 0 ]; then
-      summary+="$display: signed\n"
-      success=$((success + 1))
-    elif printf '%s' "$OUTPUT" | grep -qi 'already been signed'; then
-      summary+="$display: already signed\n"
-      already=$((already + 1))
-    else
-      summary+="$display: FAILED (exit $STATUS)\n$OUTPUT\n\n"
-      failed=$((failed + 1))
-    fi
+    sbctl_sign_analyze "$kernel"
+    case "$SBCTL_RESULT" in
+      signed)
+        summary+="$display: signed\n"
+        success=$((success + 1))
+        ;;
+      already)
+        summary+="$display: already signed\n"
+        already=$((already + 1))
+        ;;
+      *)
+        summary+="$display: FAILED (exit $SBCTL_STATUS)\n$SBCTL_CLEAN_OUTPUT\n\n"
+        failed=$((failed + 1))
+        ;;
+    esac
   done
 
   summary=$(printf '%s' "$summary" | sanitize_printable)

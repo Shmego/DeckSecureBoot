@@ -21,6 +21,8 @@ GRUB_PREFIX="${BUILD_ROOT}/out"
 GRUB_MK="${GRUB_PREFIX}/bin/grub-mkstandalone"
 DECKSB_GRUB_CMD_SRC="${SCRIPT_DIR}/grub-decksb-conf.c"
 DECKSB_GRUB_CMD_DST_REL="grub-core/commands/decksb_conf.c"
+DECKSB_GRUB_CMD_DST="${GRUB_SRC}/${DECKSB_GRUB_CMD_DST_REL}"
+DECKSB_GRUB_MOD="${GRUB_PREFIX}/lib/grub/x86_64-efi/decksb_conf.mod"
 REBUILD_GRUB=0
 
 install_build_deps() {
@@ -60,8 +62,13 @@ git fetch origin
 git checkout --force "$GRUB_COMMIT"
 
 if [ -f "$DECKSB_GRUB_CMD_SRC" ]; then
-  echo "[*] installing decksb_conf module source ..."
-  cp "$DECKSB_GRUB_CMD_SRC" "$GRUB_SRC/$DECKSB_GRUB_CMD_DST_REL"
+  if [ ! -f "$DECKSB_GRUB_CMD_DST" ] || ! cmp -s "$DECKSB_GRUB_CMD_SRC" "$DECKSB_GRUB_CMD_DST"; then
+    echo "[*] updating decksb_conf module source ..."
+    cp "$DECKSB_GRUB_CMD_SRC" "$DECKSB_GRUB_CMD_DST"
+    REBUILD_GRUB=1
+  else
+    echo "[*] decksb_conf module source unchanged"
+  fi
   if ! grep -q "name = decksb_conf" "$GRUB_SRC/grub-core/Makefile.core.def"; then
     cat >> "$GRUB_SRC/grub-core/Makefile.core.def" <<'EOF'
 
@@ -74,8 +81,14 @@ EOF
   fi
 fi
 
-if [ ! -f "$GRUB_PREFIX/lib/grub/x86_64-efi/decksb_conf.mod" ]; then
+if [ ! -f "$DECKSB_GRUB_MOD" ]; then
   REBUILD_GRUB=1
+elif command -v strings >/dev/null 2>&1; then
+  # Ensure the already-built module exports our latest parser command.
+  if ! strings "$DECKSB_GRUB_MOD" | grep -q "d_ps_ok"; then
+    echo "[*] decksb_conf.mod is stale (missing d_ps_ok), rebuilding ..."
+    REBUILD_GRUB=1
+  fi
 fi
 
 # --- build grub if needed ---
@@ -147,10 +160,6 @@ if [ -n "$cmdpath" ]; then
             done
         fi
     fi
-
-    if [ "$deck_sb_cfg_loaded" = 1 ]; then
-        return
-    fi
 fi
 
 # 2) fallback: search lowercase
@@ -158,7 +167,7 @@ if [ "$deck_sb_cfg_loaded" = 0 ]; then
     search --file /efi/deck-sb/deck-sb.cfg --set=esp
     if [ -n "$esp" ]; then
         source ($esp)/efi/deck-sb/deck-sb.cfg
-        return
+        set deck_sb_cfg_loaded=1
     fi
 fi
 
@@ -167,7 +176,7 @@ if [ "$deck_sb_cfg_loaded" = 0 ]; then
     search --file /EFI/deck-sb/deck-sb.cfg --set=esp
     if [ -n "$esp" ]; then
         source ($esp)/EFI/deck-sb/deck-sb.cfg
-        return
+        set deck_sb_cfg_loaded=1
     fi
 fi
 

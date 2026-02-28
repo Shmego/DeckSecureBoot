@@ -28,13 +28,24 @@
 GRUB_MOD_LICENSE ("GPLv3+");
 
 #define DECKSB_CONF_MAX_SIZE 8192
+#define DECKSB_PARTSET_MAX_SIZE 8192
 
-struct decksb_conf_info
+struct d_ci
 {
   grub_uint64_t boot_requested_at;
   grub_uint64_t boot_time;
   grub_uint64_t boot_count;
   int reboot_self;
+  int valid;
+};
+
+struct d_pi
+{
+  char *rootfs;
+  char *efi;
+  char *var;
+  char *home;
+  char *esp;
   int valid;
 };
 
@@ -46,8 +57,190 @@ skip_ws (const char *p)
   return p;
 }
 
+static char
+d_tol (char c)
+{
+  if (c >= 'A' && c <= 'Z')
+    return (char) (c - 'A' + 'a');
+  return c;
+}
+
+static int
+d_is_w (char c)
+{
+  if ((c >= '0' && c <= '9')
+      || (c >= 'a' && c <= 'z')
+      || (c >= 'A' && c <= 'Z')
+      || c == '_')
+    return 1;
+  return 0;
+}
+
+static int
+d_is_h (char c)
+{
+  c = d_tol (c);
+  return ((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'));
+}
+
+static int
+d_sw_ci (const char *s, const char *prefix)
+{
+  while (*prefix)
+    {
+      if (!*s)
+        return 0;
+      if (d_tol (*s) != d_tol (*prefix))
+        return 0;
+      s++;
+      prefix++;
+    }
+  return 1;
+}
+
+static int
+d_has_k (const char *line, const char *key)
+{
+  grub_size_t i;
+  grub_size_t line_len;
+  grub_size_t key_len;
+
+  if (!line || !key)
+    return 0;
+
+  line_len = grub_strlen (line);
+  key_len = grub_strlen (key);
+  if (line_len < key_len)
+    return 0;
+
+  for (i = 0; i + key_len <= line_len; i++)
+    {
+      grub_size_t j;
+      char prev;
+      char next;
+      int match = 1;
+
+      for (j = 0; j < key_len; j++)
+        {
+          if (d_tol (line[i + j]) != key[j])
+            {
+              match = 0;
+              break;
+            }
+        }
+      if (!match)
+        continue;
+
+      prev = (i > 0) ? line[i - 1] : '\0';
+      next = (i + key_len < line_len) ? line[i + key_len] : '\0';
+      if (d_is_w (prev) || d_is_w (next))
+        continue;
+
+      return 1;
+    }
+
+  return 0;
+}
+
+static int
+d_uuid_at (const char *p)
+{
+  grub_size_t i;
+  grub_size_t len;
+
+  if (!p)
+    return 0;
+  len = grub_strlen (p);
+  if (len < 36)
+    return 0;
+
+  for (i = 0; i < 36; i++)
+    {
+      if (i == 8 || i == 13 || i == 18 || i == 23)
+        {
+          if (p[i] != '-')
+            return 0;
+        }
+      else if (!d_is_h (p[i]))
+        return 0;
+    }
+
+  if (p[36] && (d_is_h (p[36]) || p[36] == '-'))
+    return 0;
+
+  return 1;
+}
+
+static char *
+d_uuid_cp (const char *p)
+{
+  char *out;
+  grub_size_t i;
+
+  if (!d_uuid_at (p))
+    return 0;
+
+  out = grub_malloc (37);
+  if (!out)
+    return 0;
+
+  for (i = 0; i < 36; i++)
+    out[i] = d_tol (p[i]);
+  out[36] = '\0';
+  return out;
+}
+
+static char *
+d_uuid_ln (const char *line)
+{
+  const char *p;
+  const char *prefix;
+  grub_size_t i;
+  grub_size_t prefix_len;
+  const char *prefixes[] = { "partuuid=", "by-partuuid/", "uuid=" };
+  grub_size_t prefix_lens[] = { 9, 12, 5 };
+  grub_size_t k;
+
+  if (!line)
+    return 0;
+
+  for (k = 0; k < 3; k++)
+    {
+      prefix = prefixes[k];
+      prefix_len = prefix_lens[k];
+
+      p = line;
+      while (p && *p)
+        {
+          while (*p && !d_sw_ci (p, prefix))
+            p++;
+          if (!*p)
+            break;
+
+          p += prefix_len;
+          while (*p && !d_is_h (*p))
+            p++;
+          if (d_uuid_at (p))
+            return d_uuid_cp (p);
+
+          if (*p)
+            p++;
+        }
+    }
+
+  for (i = 0; line[i]; i++)
+    {
+      if (!d_is_h (line[i]))
+        continue;
+      if (d_uuid_at (&line[i]))
+        return d_uuid_cp (&line[i]);
+    }
+
+  return 0;
+}
+
 static void
-parse_conf_line (struct decksb_conf_info *info, const char *line)
+parse_conf_line (struct d_ci *info, const char *line)
 {
   const char *value;
 
@@ -85,7 +278,7 @@ parse_conf_line (struct decksb_conf_info *info, const char *line)
 }
 
 static void
-read_conf_file (const char *path, struct decksb_conf_info *info)
+read_conf_file (const char *path, struct d_ci *info)
 {
   grub_file_t file;
   grub_off_t size;
@@ -140,6 +333,114 @@ read_conf_file (const char *path, struct decksb_conf_info *info)
   grub_free (buf);
 }
 
+static void
+parse_partset_line (struct d_pi *info, char *line)
+{
+  char *comment;
+  char *uuid = 0;
+
+  if (!line || !*line)
+    return;
+
+  while (*line && grub_isspace (*line))
+    line++;
+  if (!*line || *line == '#')
+    return;
+
+  comment = grub_strchr (line, '#');
+  if (comment)
+    *comment = '\0';
+
+  if (!info->rootfs && d_has_k (line, "rootfs"))
+    {
+      uuid = d_uuid_ln (line);
+      if (uuid)
+        info->rootfs = uuid;
+    }
+  if (!info->efi && d_has_k (line, "efi"))
+    {
+      uuid = d_uuid_ln (line);
+      if (uuid)
+        info->efi = uuid;
+    }
+  if (!info->var && d_has_k (line, "var"))
+    {
+      uuid = d_uuid_ln (line);
+      if (uuid)
+        info->var = uuid;
+    }
+  if (!info->home && d_has_k (line, "home"))
+    {
+      uuid = d_uuid_ln (line);
+      if (uuid)
+        info->home = uuid;
+    }
+  if (!info->esp && d_has_k (line, "esp"))
+    {
+      uuid = d_uuid_ln (line);
+      if (uuid)
+        info->esp = uuid;
+    }
+
+  if (info->rootfs || info->efi || info->var || info->home || info->esp)
+    info->valid = 1;
+}
+
+static void
+read_partset_file (const char *path, struct d_pi *info)
+{
+  grub_file_t file;
+  grub_off_t size;
+  grub_ssize_t read_len;
+  char *buf;
+  char *line;
+  char *next;
+
+  file = grub_file_open (path, GRUB_FILE_TYPE_CONFIG);
+  if (!file)
+    {
+      grub_errno = 0;
+      return;
+    }
+
+  size = grub_file_size (file);
+  if (size == GRUB_FILE_SIZE_UNKNOWN || size <= 0 || size > DECKSB_PARTSET_MAX_SIZE)
+    size = DECKSB_PARTSET_MAX_SIZE;
+
+  buf = grub_malloc (size + 1);
+  if (!buf)
+    {
+      grub_file_close (file);
+      return;
+    }
+
+  read_len = grub_file_read (file, buf, size);
+  grub_file_close (file);
+  if (read_len <= 0)
+    {
+      grub_free (buf);
+      return;
+    }
+
+  buf[read_len] = '\0';
+  line = buf;
+  while (line && *line)
+    {
+      next = grub_strchr (line, '\n');
+      if (next)
+        {
+          *next = '\0';
+          next++;
+        }
+      if (line[0] && line[grub_strlen (line) - 1] == '\r')
+        line[grub_strlen (line) - 1] = '\0';
+      parse_partset_line (info, line);
+      line = next;
+    }
+
+  grub_free (buf);
+}
+
 static char
 pick_latest (grub_uint64_t a, grub_uint64_t b)
 {
@@ -151,7 +452,7 @@ pick_latest (grub_uint64_t a, grub_uint64_t b)
 }
 
 static char
-pick_slot (const struct decksb_conf_info *a, const struct decksb_conf_info *b, const char **reason)
+pick_slot (const struct d_ci *a, const struct d_ci *b, const char **reason)
 {
   char slot = 0;
 
@@ -233,19 +534,73 @@ set_u64_env (const char *name, grub_uint64_t value)
   grub_free (buf);
 }
 
+static void
+set_or_unset_env (const char *name, const char *value)
+{
+  if (value && *value)
+    grub_env_set (name, value);
+  else
+    grub_env_unset (name);
+}
+
+static void
+clr_ps_env (void)
+{
+  grub_env_unset ("d_ps_ok");
+  grub_env_unset ("d_ps_src");
+  grub_env_unset ("d_ps_rf");
+  grub_env_unset ("d_ps_ef");
+  grub_env_unset ("d_ps_vr");
+  grub_env_unset ("d_ps_hm");
+  grub_env_unset ("d_ps_ep");
+}
+
 static grub_err_t
-grub_cmd_decksb_conf (grub_command_t cmd __attribute__ ((unused)),
+grub_cmd_d_ps (grub_command_t cmd __attribute__ ((unused)),
+                         int argc, char **args)
+{
+  struct d_pi info;
+
+  if (argc < 1 || !args[0] || !args[0][0])
+    {
+      clr_ps_env ();
+      return 0;
+    }
+
+  grub_memset (&info, 0, sizeof (info));
+  clr_ps_env ();
+  read_partset_file (args[0], &info);
+
+  set_or_unset_env ("d_ps_src", args[0]);
+  if (info.valid)
+    grub_env_set ("d_ps_ok", "1");
+  set_or_unset_env ("d_ps_rf", info.rootfs);
+  set_or_unset_env ("d_ps_ef", info.efi);
+  set_or_unset_env ("d_ps_vr", info.var);
+  set_or_unset_env ("d_ps_hm", info.home);
+  set_or_unset_env ("d_ps_ep", info.esp);
+
+  grub_free (info.rootfs);
+  grub_free (info.efi);
+  grub_free (info.var);
+  grub_free (info.home);
+  grub_free (info.esp);
+  return 0;
+}
+
+static grub_err_t
+grub_cmd_d_cf (grub_command_t cmd __attribute__ ((unused)),
                       int argc, char **args)
 {
-  struct decksb_conf_info info_a;
-  struct decksb_conf_info info_b;
+  struct d_ci info_a;
+  struct d_ci info_b;
   char *path_a;
   char *path_b;
   const char *reason = 0;
   char slot = 0;
 
   if (argc < 1)
-    return grub_error (GRUB_ERR_BAD_ARGUMENT, "usage: decksb_conf <conf_dir>");
+    return grub_error (GRUB_ERR_BAD_ARGUMENT, "usage: d_cf <conf_dir>");
 
   grub_memset (&info_a, 0, sizeof (info_a));
   grub_memset (&info_b, 0, sizeof (info_b));
@@ -280,37 +635,42 @@ grub_cmd_decksb_conf (grub_command_t cmd __attribute__ ((unused)),
       char slot_buf[2];
       slot_buf[0] = slot;
       slot_buf[1] = '\0';
-      grub_env_set ("decksb_slot", slot_buf);
+      grub_env_set ("d_sl", slot_buf);
     }
   if (reason)
-    grub_env_set ("decksb_reason", reason);
+    grub_env_set ("d_rs", reason);
 
   if (info_a.valid)
     {
-      set_u64_env ("decksb_a_requested_at", info_a.boot_requested_at);
-      set_u64_env ("decksb_a_boot_time", info_a.boot_time);
-      set_u64_env ("decksb_a_boot_count", info_a.boot_count);
+      set_u64_env ("d_a_rq", info_a.boot_requested_at);
+      set_u64_env ("d_a_tm", info_a.boot_time);
+      set_u64_env ("d_a_ct", info_a.boot_count);
     }
   if (info_b.valid)
     {
-      set_u64_env ("decksb_b_requested_at", info_b.boot_requested_at);
-      set_u64_env ("decksb_b_boot_time", info_b.boot_time);
-      set_u64_env ("decksb_b_boot_count", info_b.boot_count);
+      set_u64_env ("d_b_rq", info_b.boot_requested_at);
+      set_u64_env ("d_b_tm", info_b.boot_time);
+      set_u64_env ("d_b_ct", info_b.boot_count);
     }
 
   return 0;
 }
 
-static grub_command_t cmd;
+static grub_command_t cmd_conf;
+static grub_command_t cmd_partset;
 
 GRUB_MOD_INIT(decksb_conf)
 {
-  cmd = grub_register_command ("decksb_conf", grub_cmd_decksb_conf,
-                               N_("CONF_DIR"),
-                               N_("Parse SteamOS bootconf and set decksb_slot."));
+  cmd_conf = grub_register_command ("d_cf", grub_cmd_d_cf,
+                                    N_("CONF_DIR"),
+                                    N_("Parse SteamOS bootconf and set d_sl."));
+  cmd_partset = grub_register_command ("d_ps", grub_cmd_d_ps,
+                                       N_("PARTSET_FILE"),
+                                       N_("Parse SteamOS partset file and set d_ps_* vars."));
 }
 
 GRUB_MOD_FINI(decksb_conf)
 {
-  grub_unregister_command (cmd);
+  grub_unregister_command (cmd_conf);
+  grub_unregister_command (cmd_partset);
 }

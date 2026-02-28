@@ -14,6 +14,9 @@ fi
 : "${DECK_SB_JUMP_STATE_FILE:=$DECK_SB_STATE_DIR/jump.state}"
 : "${DECK_SB_ERROR_FILE:=$DECK_SB_STATE_DIR/last-error}"
 : "${DECK_SB_MENU_CONTEXT:=0}"
+: "${DECK_SB_ISO_MOUNT:=/run/archiso/bootmnt}"
+: "${DECK_SB_TMP_EFI_MOUNT_BASE:=/run/deck-efi}"
+: "${DECK_SB_TMP_LINUX_MOUNT_BASE:=/run/deck-root}"
 : "${STEAMOS_ROOT_BASE:=/run/deck-os}"
 : "${STEAMOS_BOOT_BASE:=/run/deck-boot}"
 # Preferred label for the live ISO; fallback labels keep backward compatibility.
@@ -36,6 +39,9 @@ export DECK_SB_STATE_DIR
 export DECK_SB_JUMP_STATE_FILE
 export DECK_SB_ERROR_FILE
 export DECK_SB_MENU_CONTEXT
+export DECK_SB_ISO_MOUNT
+export DECK_SB_TMP_EFI_MOUNT_BASE
+export DECK_SB_TMP_LINUX_MOUNT_BASE
 export STEAMOS_ROOT_BASE
 export STEAMOS_BOOT_BASE
 export DECK_SB_ISO_LABEL
@@ -67,6 +73,29 @@ sbctl_sign_capture() {
   return 0
 }
 
+sbctl_output_already_signed() {
+  local output="$1"
+  printf '%s' "$output" | grep -qi 'already been signed'
+}
+
+sbctl_sign_analyze() {
+  # Run sbctl sign and expose normalized result state for callers.
+  # Outputs via globals:
+  #   SBCTL_STATUS, SBCTL_RAW_OUTPUT (from sbctl_sign_capture)
+  #   SBCTL_CLEAN_OUTPUT (printable/sanitized)
+  #   SBCTL_RESULT in {signed,already,failed}
+  local target="$1"
+  sbctl_sign_capture "$target"
+  SBCTL_CLEAN_OUTPUT=$(printf '%s' "$SBCTL_RAW_OUTPUT" | sanitize_printable)
+  SBCTL_RESULT="failed"
+  if [ "$SBCTL_STATUS" -eq 0 ]; then
+    SBCTL_RESULT="signed"
+  elif sbctl_output_already_signed "$SBCTL_CLEAN_OUTPUT"; then
+    SBCTL_RESULT="already"
+  fi
+  return 0
+}
+
 secure_boot_enabled() {
   command -v sbctl >/dev/null 2>&1 || return 1
   local sb_line
@@ -89,6 +118,10 @@ format_display_path() {
     fi
   done
   printf '%s\n' "$display" | sed -e 's://*:/:g'
+}
+
+deck_display_path() {
+  format_display_path "$1" "${DECK_SB_TMP_EFI_MOUNT_BASE:-}" "${DECK_SB_TMP_LINUX_MOUNT_BASE:-}"
 }
 
 deck_dialog() {
@@ -179,6 +212,50 @@ sb_set_error() {
 sb_get_error() {
   [ -s "$DECK_SB_ERROR_FILE" ] || return 1
   cat "$DECK_SB_ERROR_FILE"
+}
+
+sb_pending_state() {
+  [ -f "$DECK_SB_PENDING_FLAG" ] || return 1
+  tr -d '\r\n' < "$DECK_SB_PENDING_FLAG" 2>/dev/null
+}
+
+sb_pending_mark() {
+  local state="$1"
+  mkdir -p "$(dirname "$DECK_SB_PENDING_FLAG")" 2>/dev/null || true
+  printf '%s\n' "$state" > "$DECK_SB_PENDING_FLAG"
+}
+
+sb_pending_clear() {
+  rm -f "$DECK_SB_PENDING_FLAG" 2>/dev/null || true
+}
+
+sb_pending_suffix() {
+  [ -f "$DECK_SB_PENDING_FLAG" ] && printf ' (pending reboot)' || printf ''
+}
+
+sb_require_efivars() {
+  if [ ! -d /sys/firmware/efi/efivars ]; then
+    sb_error "UEFI/efivars not present"
+    return 1
+  fi
+  return 0
+}
+
+sb_unlock_efi_vars() {
+  chattr -i /sys/firmware/efi/efivars/{PK,KEK,db}* 2>/dev/null || true
+}
+
+sb_require_key_files() {
+  local keydir="$1"
+  shift
+  local f
+  for f in "$@"; do
+    if [ ! -f "$keydir/$f" ]; then
+      sb_error "Missing key file: $keydir/$f"
+      return 1
+    fi
+  done
+  return 0
 }
 
 detect_fstype_for_path() {
@@ -645,13 +722,6 @@ prepare_steamos_root_for_write() {
       if ensure_rw_mount "$rootmp"; then
         return 0
       fi
-    fi
-  fi
-
-  if [ -x "$rootmp/usr/bin/steamos-readonly" ]; then
-    chroot "$rootmp" /usr/bin/steamos-readonly disable 2>/dev/null || true
-    if ensure_rw_mount "$rootmp"; then
-      return 0
     fi
   fi
 

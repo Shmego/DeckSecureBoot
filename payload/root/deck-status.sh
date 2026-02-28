@@ -4,8 +4,6 @@ set -euo pipefail
 # shellcheck disable=SC1091
 . /root/deck-env.sh
 
-PENDING_FLAG="${DECK_SB_PENDING_FLAG}"
-
 sbctl_state="missing"   # one of: missing, enabled, disabled, unknown
 
 sbctl_status() {
@@ -32,9 +30,9 @@ sbctl_status() {
 }
 
 pending_message() {
-  [ -f "$PENDING_FLAG" ] || return
   local state applied=0 msg
-  state=$(tr -d '\r\n' < "$PENDING_FLAG" 2>/dev/null)
+  state=$(sb_pending_state 2>/dev/null || true)
+  [ -n "$state" ] || return
   case "$state" in
     enable)  msg="Secure Boot enable is pending; reboot to apply your changes." ; [ "$sbctl_state" = "enabled" ] && applied=1 ;;
     disable) msg="Secure Boot disable is pending; reboot to apply your changes." ; [ "$sbctl_state" = "disabled" ] && applied=1 ;;
@@ -42,7 +40,7 @@ pending_message() {
   esac
   if [ "$applied" -eq 1 ]; then
     msg="Secure Boot change appears active now."
-    rm -f "$PENDING_FLAG"
+    sb_pending_clear
   fi
   printf '%s\n' "$msg"
 }
