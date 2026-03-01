@@ -16,8 +16,33 @@ ISO_DEBUG_LOG="$DECK_SB_DEBUG_LOG"
 
 copy_iso_payload() {
   local rootmp="$1"
+  local share_dir="$rootmp/usr/local/share"
   local dest="$rootmp$ISO_RELATIVE_PATH"
-  mkdir -p "$dest"
+  local write_probe=""
+
+  if [ ! -d "$share_dir" ]; then
+    sb_error "Detected SteamOS root is missing /usr/local/share at $(format_display_path "$share_dir").\nAborting ISO install to disk."
+    return 1
+  fi
+
+  if ! ensure_rw_for_path "$share_dir"; then
+    sb_error "Filesystem containing $(format_display_path "$share_dir") is read-only.\nRemount it writable and retry."
+    return 1
+  fi
+
+  if [ ! -d "$dest" ]; then
+    if ! mkdir -p "$dest"; then
+      sb_error "Failed to create $(format_display_path "$dest").\nCheck write permissions on $(format_display_path "$share_dir")."
+      return 1
+    fi
+  fi
+
+  write_probe="$dest/.deck-sb-write-test.$$"
+  if ! : > "$write_probe" 2>/dev/null; then
+    sb_error "Cannot write to $(format_display_path "$dest").\nThe target filesystem still appears read-only."
+    return 1
+  fi
+  rm -f "$write_probe" 2>/dev/null || true
 
   local avail
   avail=$(df -m --output=avail "$dest" | tail -n1 | tr -d ' ')
@@ -133,6 +158,10 @@ main() {
 
   if ! prepare_steamos_root_for_write "$realroot"; then
     sb_error "Unable to remount $pretty_root writable."
+    exit 1
+  fi
+  if ! ensure_rw_for_path "$realroot"; then
+    sb_error "Detected SteamOS root $pretty_root is still read-only after remount attempt."
     exit 1
   fi
 

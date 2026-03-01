@@ -180,15 +180,15 @@ BEGIN {
   line_lc = tolower(line)
   if (line_lc !~ ("(^|[^[:alnum:]_])" key "([^[:alnum:]_]|$)")) next
 
-  if (match(line_lc, /partuuid=[^[:space:]\",;]+/)) {
+  if (match(line_lc, /partuuid=[^[:space:]",;]+/)) {
     emit_if_uuid(substr(line_lc, RSTART + 9, RLENGTH - 9))
     if (found) exit
   }
-  if (match(line_lc, /by-partuuid\/[^[:space:]\",;]+/)) {
+  if (match(line_lc, /by-partuuid\/[^[:space:]",;]+/)) {
     emit_if_uuid(substr(line_lc, RSTART + 12, RLENGTH - 12))
     if (found) exit
   }
-  if (match(line_lc, /uuid=[^[:space:]\",;]+/)) {
+  if (match(line_lc, /uuid=[^[:space:]",;]+/)) {
     emit_if_uuid(substr(line_lc, RSTART + 5, RLENGTH - 5))
     if (found) exit
   }
@@ -251,7 +251,7 @@ find_esp_root_for_custom_dir() {
 
 sign_kernel_on_partuuid() {
   local partuuid="$1" label="$2"
-  local dev="" fstype="" top_mount="" root_mount="" root_path="" subvol_rel="" ro_state="" ro_changed=0
+  local dev="" fstype="" top_mount="" root_mount="" root_path="" subvol_rel="" ro_state="" ro_restore="" ro_changed=0
 
   if [ -z "$partuuid" ]; then
     log_debug "sign: $label missing partuuid"
@@ -327,7 +327,8 @@ sign_kernel_on_partuuid() {
       fi
     fi
 
-    if [ "$ro_state" = "true" ] || [ -z "$ro_state" ]; then
+    if [ "$ro_state" = "true" ]; then
+      ro_restore="true"
       log_debug "sign: $label setting ro=false on ${subvol_rel:-top-level}"
       if btrfs property set -ts "$root_path" ro false 2>/dev/null; then
         ro_changed=1
@@ -335,14 +336,19 @@ sign_kernel_on_partuuid() {
       else
         log_debug "sign: $label failed to set ro=false on ${subvol_rel:-top-level}"
       fi
+    elif [ "$ro_state" = "false" ]; then
+      ro_restore="false"
+      log_debug "sign: $label ro already false on ${subvol_rel:-top-level}"
+    else
+      log_debug "sign: $label ro state unknown, skipping btrfs ro property changes on ${subvol_rel:-top-level}"
     fi
 
     if [ -n "$subvol_rel" ]; then
       log_debug "sign: $label mounting subvol $subvol_rel at $root_mount"
       if ! mount -o "subvol=$subvol_rel" "$dev" "$root_mount"; then
         log_debug "sign: $label failed to mount subvol $subvol_rel"
-        if [ "$ro_changed" -eq 1 ]; then
-          btrfs property set -ts "$root_path" ro true 2>/dev/null || true
+        if [ "$ro_changed" -eq 1 ] && [ -n "$ro_restore" ]; then
+          btrfs property set -ts "$root_path" ro "$ro_restore" 2>/dev/null || true
         fi
         umount "$top_mount" 2>/dev/null || true
         rmdir "$top_mount" "$root_mount" 2>/dev/null || true
@@ -406,11 +412,11 @@ sign_kernel_on_partuuid() {
     umount "$root_mount" 2>/dev/null || true
   fi
   if [ "$fstype" = "btrfs" ]; then
-    if [ "$ro_changed" -eq 1 ] && [ -n "$root_path" ]; then
-      if btrfs property set -ts "$root_path" ro true 2>/dev/null; then
-        log_debug "sign: $label restored ro=true on $subvol_rel"
+    if [ "$ro_changed" -eq 1 ] && [ -n "$root_path" ] && [ -n "$ro_restore" ]; then
+      if btrfs property set -ts "$root_path" ro "$ro_restore" 2>/dev/null; then
+        log_debug "sign: $label restored ro=$ro_restore on ${subvol_rel:-top-level}"
       else
-        log_debug "sign: $label failed to restore ro=true on $subvol_rel"
+        log_debug "sign: $label failed to restore ro=$ro_restore on ${subvol_rel:-top-level}"
       fi
     fi
     log_debug "sign: $label unmounting top-level $top_mount"

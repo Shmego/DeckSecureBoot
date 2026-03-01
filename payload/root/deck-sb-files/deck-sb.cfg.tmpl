@@ -164,30 +164,62 @@ function d_dbg_ps {
     if [ x$d_ps_src != x ]; then
         echo "DeckSB: partset src $d_ps_src"
     fi
+    if [ x$d_pt = xshared ]; then
+        if [ x$d_ps_hm != x ]; then
+            echo "DeckSB: partset home $d_ps_hm"
+        else
+            echo "DeckSB: partset home missing (shared)"
+        fi
+        if [ x$d_ps_ep != x ]; then
+            echo "DeckSB: partset esp $d_ps_ep"
+        else
+            echo "DeckSB: partset esp missing (shared)"
+        fi
+        return
+    fi
+    if [ x$d_pt = xall ]; then
+        if [ x$d_ps_hm != x ]; then
+            echo "DeckSB: partset home $d_ps_hm"
+        else
+            echo "DeckSB: partset home missing (all)"
+        fi
+        if [ x$d_ps_ep != x ]; then
+            echo "DeckSB: partset esp $d_ps_ep"
+        else
+            echo "DeckSB: partset esp missing (all)"
+        fi
+        if [ x$d_ps_rf != x ]; then
+            echo "DeckSB: partset rootfs aggregate $d_ps_rf"
+        fi
+        if [ x$d_ps_ef != x ]; then
+            echo "DeckSB: partset efi aggregate $d_ps_ef"
+        fi
+        if [ x$d_ps_vr != x ]; then
+            echo "DeckSB: partset var aggregate $d_ps_vr"
+        fi
+        return
+    fi
+
     if [ x$d_ps_rf != x ]; then
         echo "DeckSB: partset rootfs $d_ps_rf"
     else
-        echo "DeckSB: partset rootfs missing"
+        echo "DeckSB: partset rootfs missing ($d_pt)"
     fi
     if [ x$d_ps_ef != x ]; then
         echo "DeckSB: partset efi $d_ps_ef"
     else
-        echo "DeckSB: partset efi missing"
+        echo "DeckSB: partset efi missing ($d_pt)"
     fi
     if [ x$d_ps_vr != x ]; then
         echo "DeckSB: partset var $d_ps_vr"
     else
-        echo "DeckSB: partset var missing"
+        echo "DeckSB: partset var missing ($d_pt)"
     fi
     if [ x$d_ps_hm != x ]; then
         echo "DeckSB: partset home $d_ps_hm"
-    else
-        echo "DeckSB: partset home missing"
     fi
     if [ x$d_ps_ep != x ]; then
         echo "DeckSB: partset esp $d_ps_ep"
-    else
-        echo "DeckSB: partset esp missing"
     fi
 }
 
