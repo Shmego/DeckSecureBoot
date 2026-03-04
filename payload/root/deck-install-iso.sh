@@ -39,8 +39,14 @@ copy_iso_payload() {
 
   write_probe="$dest/.deck-sb-write-test.$$"
   if ! : > "$write_probe" 2>/dev/null; then
-    sb_error "Cannot write to $(format_display_path "$dest").\nThe target filesystem still appears read-only."
-    return 1
+    # One more forced write-enable attempt before failing.
+    log_debug "copy_iso_payload: initial write probe failed at $dest; retrying prepare_steamos_root_for_write"
+    prepare_steamos_root_for_write "$rootmp" || true
+    ensure_rw_for_path "$share_dir" || true
+    if ! : > "$write_probe" 2>/dev/null; then
+      sb_error "Cannot write to $(format_display_path "$dest").\nThe target filesystem still appears read-only."
+      return 1
+    fi
   fi
   rm -f "$write_probe" 2>/dev/null || true
 

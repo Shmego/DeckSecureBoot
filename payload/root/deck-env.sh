@@ -1,8 +1,12 @@
 #!/bin/bash
 # Common environment values shared across Deck Secure Boot scripts.
 : "${DECK_SB_VERSION:=__DECK_SB_VERSION__}"
+: "${DECK_SB_DEBUG:=__DECK_SB_DEBUG__}"
 if [ "$DECK_SB_VERSION" = "__DECK_SB_VERSION__" ]; then
-  DECK_SB_VERSION="dev"
+  DECK_SB_VERSION="unknown"
+fi
+if [ "$DECK_SB_DEBUG" = "__DECK_SB_DEBUG__" ]; then
+  DECK_SB_DEBUG=0
 fi
 : "${DECK_SB_BACKTITLE:=DeckSB Manager v${DECK_SB_VERSION} - D-Pad to navigate, A to select, B to cancel.}"
 : "${DECK_SB_KEYDIR:=/usr/share/deck-sb/keys}"
@@ -22,11 +26,10 @@ fi
 # Preferred label for the live ISO; fallback labels keep backward compatibility.
 : "${DECK_SB_ISO_LABEL:=DECK_SB}"
 : "${DECK_SB_DEBUG_LOG:=/run/deck-sb/install-iso-debug.log}"
-: "${DECK_SB_DEBUG:=0}"
-
-if [ "$DECK_SB_VERSION" = "dev" ]; then
-  DECK_SB_DEBUG=1
-fi
+case "${DECK_SB_DEBUG,,}" in
+  1|true|yes|on) DECK_SB_DEBUG=1 ;;
+  *) DECK_SB_DEBUG=0 ;;
+esac
 
 export DECK_SB_BACKTITLE
 export DECK_SB_VERSION
@@ -708,21 +711,25 @@ derive_partnum() {
 
 prepare_steamos_root_for_write() {
   local rootmp="$1"
-  local fstype
+  local fstype ro_state
+
+  fstype=$(findmnt -nr -T "$rootmp" -o FSTYPE 2>/dev/null || true)
+
+  # On SteamOS btrfs, subvolume ro=true can block writes even when mount opts show rw.
+  if [ "$fstype" = "btrfs" ] && command -v btrfs >/dev/null 2>&1; then
+    ro_state=$(btrfs property get -ts "$rootmp" ro 2>/dev/null | awk -F= '/ro=/{print tolower($2)}' | tr -d '[:space:]')
+    if [ "$ro_state" = "true" ]; then
+      btrfs property set -ts "$rootmp" ro false >/dev/null 2>&1 || true
+    fi
+  fi
 
   if ensure_rw_mount "$rootmp"; then
     return 0
   fi
 
-  fstype=$(findmnt -nr -T "$rootmp" -o FSTYPE 2>/dev/null || true)
-
   if [ "$fstype" = "btrfs" ] && command -v btrfs >/dev/null 2>&1; then
-    if btrfs property get -ts "$rootmp" ro >/dev/null 2>&1; then
-      btrfs property set -ts "$rootmp" ro false >/dev/null 2>&1 || true
-      if ensure_rw_mount "$rootmp"; then
-        return 0
-      fi
-    fi
+    btrfs property set -ts "$rootmp" ro false >/dev/null 2>&1 || true
+    ensure_rw_mount "$rootmp" && return 0
   fi
 
   return 1

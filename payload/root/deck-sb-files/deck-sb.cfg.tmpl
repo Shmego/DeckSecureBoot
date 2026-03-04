@@ -86,6 +86,7 @@ set d_b_sf=
 set d_a_md=
 set d_b_md=
 set d_bn=
+set d_gdbg=__DECK_SB_DEBUG__
 
 function d_rf_set {
     if [ x$d_pt = xself ]; then
@@ -569,10 +570,14 @@ function d_res_rf {
 
 
 menuentry 'SteamOS SB (shimless)' {
-    # IMPORTANT: do NOT reset gfxpayload or terminal here.
-    # We want to keep the hi-res framebuffer and gfxterm.
-    
-    background_image $cmdpath/boot.png
+    if [ x$d_gdbg = x1 ]; then
+        echo "DeckSB: dev grub verbose mode enabled"
+        set gfxpayload=text
+        terminal_output console
+    else
+        # Keep release boots visually quiet.
+        background_image $cmdpath/boot.png
+    fi
     
     # Force a repaint to the framebuffer
 

@@ -7,7 +7,12 @@ set -euo pipefail
 # ---------------------------------------------------------------------------
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
-DECK_SB_VERSION="2.0"
+DECK_SB_VERSION="${DECK_SB_VERSION:-2.0}"
+DECK_SB_DEBUG="${DECK_SB_DEBUG:-0}"
+case "${DECK_SB_DEBUG,,}" in
+  1|true|yes|on) DECK_SB_DEBUG=1 ;;
+  *) DECK_SB_DEBUG=0 ;;
+esac
 ARCH_MIRROR_DATE="2025/12/21"
 WORKDIR=${WORKDIR:-/root/archlive}
 PROFILENAME=${PROFILENAME:-steamdeck-sb}
@@ -50,6 +55,8 @@ echo "[+] profile dir : $PROFILE_DIR"
 echo "[+] payload dir : $PAYLOAD_DIR"
 echo "[+] keys dir    : $KEYS_DIR"
 echo "[+] version     : $DECK_SB_VERSION"
+echo "[+] debug mode  : $( [ "$DECK_SB_DEBUG" -eq 1 ] && echo "enabled" || echo "disabled" )"
+echo "[+] grub mode   : $( [ "$DECK_SB_DEBUG" -eq 1 ] && echo "dev-verbose" || echo "release-quiet" )"
 echo "[+] mirror date : $ARCH_MIRROR_DATE (archive.archlinux.org)"
 
 for dir in "$PROFILE_DIR" "$PAYLOAD_DIR" "$KEYS_DIR"; do
@@ -165,6 +172,8 @@ version_escaped=${DECK_SB_VERSION//\\/\\\\}
 version_escaped=${version_escaped//&/\\&}
 version_escaped=${version_escaped//|/\\|}
 sed -i "s|__DECK_SB_VERSION__|$version_escaped|g" airootfs/root/deck-env.sh
+sed -i "s|__DECK_SB_DEBUG__|$DECK_SB_DEBUG|g" airootfs/root/deck-env.sh
+sed -i "s|__DECK_SB_DEBUG__|$DECK_SB_DEBUG|g" airootfs/root/deck-sb-files/deck-sb.cfg.tmpl
 
 chmod +x \
   airootfs/root/menu.sh \
