@@ -16,7 +16,6 @@ DEFAULT_KERNEL_IMAGE="/boot/vmlinuz-linux-neptune-611"
 DEFAULT_INITRD_IMAGES="/boot/amd-ucode.img /boot/initramfs-linux-neptune-611.img"
 STEAMOS_KERNEL_IMAGE="$DEFAULT_KERNEL_IMAGE"
 STEAMOS_INITRD_IMAGES="$DEFAULT_INITRD_IMAGES"
-STEAMOS_KERNEL_VERBOSITY="loglevel=3 quiet splash"
 BOOT_LABELS=("$NEW_EFI_LABEL" "$OLD_EFI_LABEL")
 
 ISO_MOUNT="${DECK_SB_ISO_MOUNT}"
@@ -30,10 +29,6 @@ LINUX_GPT_GUIDS=(
   44479540-F297-41B2-9AF7-D131D5F0458A
   4F68BCE3-E8CD-4DB1-96E7-FBCAF984B709
 )
-
-if [ "${DECK_SB_DEBUG:-0}" -eq 1 ]; then
-  STEAMOS_KERNEL_VERBOSITY="loglevel=5"
-fi
 
 mkdir -p "$TMP_EFI_MOUNT_BASE" "$TMP_LINUX_MOUNT_BASE"
 
@@ -701,7 +696,7 @@ write_cfg_to_custom_dir() {
 
   kernel_block=$(cat <<EOF
     echo "DeckSB: root=\$root"
-    echo "DeckSB: linux ${STEAMOS_KERNEL_IMAGE} console=tty1 rd.luks=0 rd.lvm=0 rd.md=0 rd.dm=0 rd.systemd.gpt_auto=no log_buf_len=4M amd_iommu=off amdgpu.lockup_timeout=5000,10000,10000,5000 ttm.pages_min=2097152 amdgpu.sched_hw_submission=4 audit=0 fsck.mode=auto fsck.repair=preen fbcon=rotate:1 ${STEAMOS_KERNEL_VERBOSITY} plymouth.ignore-serial-consoles fbcon=vc:4-6 noresume \$d_ar_r \$d_ar_e \$d_ar_v \$d_ar_h \$d_ar_s"
+    echo "DeckSB: linux ${STEAMOS_KERNEL_IMAGE} console=tty1 rd.luks=0 rd.lvm=0 rd.md=0 rd.dm=0 rd.systemd.gpt_auto=no log_buf_len=4M amd_iommu=off amdgpu.lockup_timeout=5000,10000,10000,5000 ttm.pages_min=2097152 amdgpu.sched_hw_submission=4 audit=0 fsck.mode=auto fsck.repair=preen fbcon=rotate:1 \$d_kv plymouth.ignore-serial-consoles fbcon=vc:4-6 noresume \$d_ar_r \$d_ar_e \$d_ar_v \$d_ar_h \$d_ar_s"
     echo "DeckSB: initrd ${STEAMOS_INITRD_IMAGES}"
     if [ -n "\$root" ]; then
         if [ -f "(\$root)${STEAMOS_KERNEL_IMAGE}" ]; then
@@ -732,7 +727,7 @@ write_cfg_to_custom_dir() {
         audit=0 \
         fsck.mode=auto fsck.repair=preen \
         fbcon=rotate:1 \
-        ${STEAMOS_KERNEL_VERBOSITY} \
+        \$d_kv \
         plymouth.ignore-serial-consoles \
         fbcon=vc:4-6 \
         noresume \

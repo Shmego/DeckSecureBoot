@@ -1,13 +1,18 @@
 #!/bin/bash
 # Common environment values shared across Deck Secure Boot scripts.
-: "${DECK_SB_VERSION:=__DECK_SB_VERSION__}"
-: "${DECK_SB_DEBUG:=__DECK_SB_DEBUG__}"
-if [ "$DECK_SB_VERSION" = "__DECK_SB_VERSION__" ]; then
-  DECK_SB_VERSION="unknown"
-fi
-if [ "$DECK_SB_DEBUG" = "__DECK_SB_DEBUG__" ]; then
-  DECK_SB_DEBUG=0
-fi
+DECK_SB_VERSION_DEFAULT="__DECK_SB_VERSION__"
+case "$DECK_SB_VERSION_DEFAULT" in
+  ""|__DECK_SB_VERSION__) DECK_SB_VERSION_DEFAULT="2.0" ;;
+esac
+: "${DECK_SB_VERSION:=$DECK_SB_VERSION_DEFAULT}"
+
+DECK_SB_DEBUG_DEFAULT="__DECK_SB_DEBUG__"
+case "${DECK_SB_DEBUG_DEFAULT,,}" in
+  1|true|yes|on) DECK_SB_DEBUG_DEFAULT=1 ;;
+  0|false|no|off) DECK_SB_DEBUG_DEFAULT=0 ;;
+  *) DECK_SB_DEBUG_DEFAULT=0 ;;
+esac
+: "${DECK_SB_DEBUG:=$DECK_SB_DEBUG_DEFAULT}"
 : "${DECK_SB_BACKTITLE:=DeckSB Manager v${DECK_SB_VERSION} - D-Pad to navigate, A to select, B to cancel.}"
 : "${DECK_SB_KEYDIR:=/usr/share/deck-sb/keys}"
 : "${DECK_SB_PENDING_FLAG:=/run/sb_pending_reboot}"

@@ -572,10 +572,10 @@ function d_res_rf {
 menuentry 'SteamOS SB (shimless)' {
     if [ x$d_gdbg = x1 ]; then
         echo "DeckSB: dev grub verbose mode enabled"
-        set gfxpayload=text
-        terminal_output console
+        set d_kv='loglevel=5'
     else
         # Keep release boots visually quiet.
+        set d_kv='loglevel=3 quiet splash'
         background_image $cmdpath/boot.png
     fi
     
