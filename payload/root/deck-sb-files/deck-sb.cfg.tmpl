@@ -87,6 +87,7 @@ set d_a_md=
 set d_b_md=
 set d_bn=
 set d_gdbg=__DECK_SB_DEBUG__
+set d_fsl=
 
 function d_rf_set {
     if [ x$d_pt = xself ]; then
@@ -422,6 +423,16 @@ function d_res_rf {
     d_ld_ps
     d_ld_cf
 
+    if [ x$d_fsl = xA ]; then
+        set d_sl=$d_fsl
+        set d_rs=forced
+        echo "DeckSB: forcing slot $d_sl"
+    elif [ x$d_fsl = xB ]; then
+        set d_sl=$d_fsl
+        set d_rs=forced
+        echo "DeckSB: forcing slot $d_sl"
+    fi
+
     if [ x$d_sl != x ]; then
         if [ x$d_rs != x ]; then
             echo "DeckSB: slot preference $d_sl via $d_rs"
@@ -488,9 +499,15 @@ function d_res_rf {
     fi
 
     if [ x$d_lbl = xA ]; then
+        if [ x$d_ra_u != x ]; then
+            set d_rf_u=$d_ra_u
+        fi
         set d_ef_u=$d_ef_a
         set d_vr_u=$d_vr_a
     elif [ x$d_lbl = xB ]; then
+        if [ x$d_rb_u != x ]; then
+            set d_rf_u=$d_rb_u
+        fi
         set d_ef_u=$d_ef_b
         set d_vr_u=$d_vr_b
     else
@@ -570,16 +587,61 @@ function d_res_rf {
 
 
 menuentry 'SteamOS SB (shimless)' {
+    set d_fsl=
     if [ x$d_gdbg = x1 ]; then
         echo "DeckSB: dev grub verbose mode enabled"
-        set d_kv='loglevel=5'
+        set pager=0
+        set d_kv="loglevel=5"
     else
         # Keep release boots visually quiet.
-        set d_kv='loglevel=3 quiet splash'
+        set pager=1
+        set d_kv="loglevel=3 quiet splash"
         background_image $cmdpath/boot.png
     fi
     
     # Force a repaint to the framebuffer
+
+    insmod part_gpt
+    insmod fat
+    insmod btrfs
+    insmod gzio
+    set d_bn=1
+    d_res_rf go
+__DECK_SB_KERNEL_BLOCK__
+}
+
+menuentry 'SteamOS SB (shimless) A' {
+    set d_fsl=A
+    if [ x$d_gdbg = x1 ]; then
+        echo "DeckSB: dev grub verbose mode enabled"
+        set pager=0
+        set d_kv="loglevel=5"
+    else
+        set pager=1
+        set d_kv="loglevel=3 quiet splash"
+        background_image $cmdpath/boot.png
+    fi
+
+    insmod part_gpt
+    insmod fat
+    insmod btrfs
+    insmod gzio
+    set d_bn=1
+    d_res_rf go
+__DECK_SB_KERNEL_BLOCK__
+}
+
+menuentry 'SteamOS SB (shimless) B' {
+    set d_fsl=B
+    if [ x$d_gdbg = x1 ]; then
+        echo "DeckSB: dev grub verbose mode enabled"
+        set pager=0
+        set d_kv="loglevel=5"
+    else
+        set pager=1
+        set d_kv="loglevel=3 quiet splash"
+        background_image $cmdpath/boot.png
+    fi
 
     insmod part_gpt
     insmod fat

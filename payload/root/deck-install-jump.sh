@@ -732,8 +732,13 @@ write_cfg_to_custom_dir() {
         fbcon=vc:4-6 \
         noresume \
         \$d_ar_r \$d_ar_e \$d_ar_v \$d_ar_h \$d_ar_s; then
+        echo "DeckSB: linux command loaded"
         if initrd ${STEAMOS_INITRD_IMAGES}; then
+            echo "DeckSB: initrd command loaded"
+            echo "DeckSB: executing boot"
             boot
+            echo "DeckSB: boot returned unexpectedly"
+            sleep 5
         else
             echo "DeckSB: initrd load failed. Re-run the EFI installer to refresh SteamOS boot assets."
             sleep 5
