@@ -586,7 +586,7 @@ function d_res_rf {
 }
 
 
-menuentry 'SteamOS SB (shimless)' {
+menuentry 'SteamOS SB (auto)' {
     set d_fsl=
     if [ x$d_gdbg = x1 ]; then
         echo "DeckSB: dev grub verbose mode enabled"
@@ -610,7 +610,7 @@ menuentry 'SteamOS SB (shimless)' {
 __DECK_SB_KERNEL_BLOCK__
 }
 
-menuentry 'SteamOS SB (shimless) A' {
+menuentry 'Steam SB (A)' {
     set d_fsl=A
     if [ x$d_gdbg = x1 ]; then
         echo "DeckSB: dev grub verbose mode enabled"
@@ -631,7 +631,7 @@ menuentry 'SteamOS SB (shimless) A' {
 __DECK_SB_KERNEL_BLOCK__
 }
 
-menuentry 'SteamOS SB (shimless) B' {
+menuentry 'Steam SB (B)' {
     set d_fsl=B
     if [ x$d_gdbg = x1 ]; then
         echo "DeckSB: dev grub verbose mode enabled"
@@ -727,7 +727,7 @@ set deck_iso_file='/usr/local/share/deck-sb/arch/boot/x86_64/vmlinuz-linux'
 set deck_iso_uuid=''
 set deck_iso_devpath=''
 if search --file $deck_iso_file --set=deck_iso_probe; then
-    menuentry 'Deck Secure Boot Tools (On Disk)' {
+    menuentry 'DeckSB Tools (On Disk)' {
         set gfxpayload=text
         terminal_output console
         insmod part_gpt

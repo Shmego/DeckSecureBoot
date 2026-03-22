@@ -737,15 +737,19 @@ write_cfg_to_custom_dir() {
             echo "DeckSB: initrd command loaded"
             echo "DeckSB: executing boot"
             boot
-            echo "DeckSB: boot returned unexpectedly"
+            echo "DeckSB: SteamOS update likely replaced the active kernel."
+            echo "DeckSB: Secure Boot requires that updated kernel to be signed."
+            echo "DeckSB: If DeckSB Tools are installed on disk, boot them and reinstall the EFI to refresh signatures."
             sleep 5
         else
             echo "DeckSB: initrd load failed. Re-run the EFI installer to refresh SteamOS boot assets."
             sleep 5
         fi
     else
-        echo "DeckSB: kernel load failed. The active kernel is unsigned."
-        echo "DeckSB: Re-run the EFI installer to sign all SteamOS kernels."
+        echo "DeckSB: kernel load failed."
+        echo "DeckSB: SteamOS may have updated and replaced the active kernel."
+        echo "DeckSB: Secure Boot requires that updated kernel to be signed."
+        echo "DeckSB: If DeckSB Tools are installed on disk, boot them and reinstall the EFI to refresh signatures."
         sleep 5
     fi
 EOF

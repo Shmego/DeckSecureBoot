@@ -76,30 +76,34 @@ done
 # ---------------------------------------------------------------------------
 # 2) install host deps if missing
 # ---------------------------------------------------------------------------
-ensure_pkg() {
-  local pkg="$1"
-  pacman -Sy --noconfirm
-  if ! pacman -Qi "$pkg" >/dev/null 2>&1; then
-    pacman -Sy --noconfirm "$pkg"
-  fi
-}
-
-refresh_keyring() {
+ensure_keyring() {
   if ! command -v pacman-key >/dev/null 2>&1; then
     return 0
   fi
-  if [ ! -d /etc/pacman.d/gnupg ] || [ ! -f /etc/pacman.d/gnupg/pubring.gpg ]; then
+  if [ ! -d /etc/pacman.d/gnupg ] || [ -z "$(pacman-key --list-keys 2>/dev/null || true)" ]; then
     pacman-key --init
     pacman-key --populate archlinux
   fi
-  pacman -Sy --noconfirm archlinux-keyring
 }
 
-refresh_keyring
-ensure_pkg archiso
-ensure_pkg grub
-ensure_pkg sbctl
-ensure_pkg sbsigntools
+install_host_deps() {
+  local missing=() pkg
+  for pkg in "$@"; do
+    if ! pacman -Qi "$pkg" >/dev/null 2>&1; then
+      missing+=("$pkg")
+    fi
+  done
+
+  if [ "${#missing[@]}" -eq 0 ]; then
+    return 0
+  fi
+
+  echo "[+] installing missing host dependencies: ${missing[*]}"
+  ensure_keyring
+  pacman -Syu --needed --noconfirm "${missing[@]}"
+}
+
+install_host_deps archiso grub sbctl sbsigntools
 
 # ---------------------------------------------------------------------------
 # 4) prepare working profile

@@ -25,22 +25,50 @@ DECKSB_GRUB_CMD_DST="${GRUB_SRC}/${DECKSB_GRUB_CMD_DST_REL}"
 DECKSB_GRUB_MOD="${GRUB_PREFIX}/lib/grub/x86_64-efi/decksb_conf.mod"
 REBUILD_GRUB=0
 
-install_build_deps() {
-  pacman -Sy
-  pacman -S --needed --noconfirm \
-    git python \
-    autoconf automake pkgconf \
-    gettext texinfo help2man \
-    flex bison libtool patch \
-    make gcc \
-    sbsigntools
+check_missing_pkgs() {
+  local missing=() pkg
+  for pkg in "$@"; do
+    if ! pacman -Qi "$pkg" >/dev/null 2>&1; then
+      missing+=("$pkg")
+    fi
+  done
+  printf '%s\n' "${missing[@]}"
+}
+
+ensure_keyring() {
+  if ! command -v pacman-key >/dev/null 2>&1; then
+    return 0
+  fi
+  if [ ! -d /etc/pacman.d/gnupg ] || [ -z "$(pacman-key --list-keys 2>/dev/null || true)" ]; then
+    pacman-key --init
+    pacman-key --populate archlinux
+  fi
 }
 
 # --- preflight ---
 [[ -f "$PK_KEY" ]] || { echo "ERROR: $PK_KEY missing"; exit 1; }
 [[ -f "$PK_CRT" ]] || { echo "ERROR: $PK_CRT missing"; exit 1; }
 
-install_build_deps
+BUILD_DEPS=(
+  git python
+  autoconf automake pkgconf
+  gettext texinfo help2man
+  flex bison libtool patch
+  make gcc
+  sbsigntools
+)
+
+MISSING_BUILD_DEPS=()
+while IFS= read -r pkg; do
+  [ -n "$pkg" ] && MISSING_BUILD_DEPS+=("$pkg")
+done < <(check_missing_pkgs "${BUILD_DEPS[@]}")
+
+if [ "${#MISSING_BUILD_DEPS[@]}" -ne 0 ]; then
+  echo "[!] missing build dependencies: ${MISSING_BUILD_DEPS[*]}"
+  echo "[+] attempting package install..."
+  ensure_keyring
+  pacman -Syu --needed --noconfirm "${MISSING_BUILD_DEPS[@]}"
+fi
 mkdir -p "$OUT_DIR"
 
 if [[ "$FORCE_REBUILD" == "1" ]]; then
@@ -104,6 +132,7 @@ if [[ ! -x "$GRUB_MK" || "$REBUILD_GRUB" == "1" ]]; then
   ./configure \
     --with-platform=efi \
     --target=x86_64 \
+    --disable-werror \
     --prefix="$GRUB_PREFIX"
 
   echo "[*] make ..."

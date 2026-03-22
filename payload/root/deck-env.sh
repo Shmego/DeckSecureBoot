@@ -668,7 +668,9 @@ ensure_rw_for_path() {
   # Best-effort remount of the filesystem containing a given file/dir.
   local target="$1"
   local mp opts
+  local src
   mp=$(findmnt -rno TARGET -T "$target" 2>/dev/null || true)
+  src=$(findmnt -rno SOURCE -T "$target" 2>/dev/null || true)
   opts=$(findmnt -rno OPTIONS -T "$target" 2>/dev/null || true)
   opts="${opts// /}"
   [ -n "$mp" ] || return 0
@@ -677,7 +679,8 @@ ensure_rw_for_path() {
     if ensure_rw_mount "$mp"; then
       return 0
     fi
-    printf 'Filesystem %s is mounted read-only. Remount it writable and try again.\n' "$mp"
+    printf 'Filesystem for %s is mounted read-only at %s (source=%s, opts=%s). Remount it writable and try again.\n' \
+      "$target" "$mp" "${src:-unknown}" "${opts:-unknown}"
     return 1
   fi
 
@@ -716,9 +719,11 @@ derive_partnum() {
 
 prepare_steamos_root_for_write() {
   local rootmp="$1"
-  local fstype ro_state
+  local fstype ro_state opts src
 
   fstype=$(findmnt -nr -T "$rootmp" -o FSTYPE 2>/dev/null || true)
+  src=$(findmnt -nr -T "$rootmp" -o SOURCE 2>/dev/null || true)
+  opts=$(findmnt -nr -T "$rootmp" -o OPTIONS 2>/dev/null || true)
 
   # On SteamOS btrfs, subvolume ro=true can block writes even when mount opts show rw.
   if [ "$fstype" = "btrfs" ] && command -v btrfs >/dev/null 2>&1; then
@@ -737,6 +742,8 @@ prepare_steamos_root_for_write() {
     ensure_rw_mount "$rootmp" && return 0
   fi
 
+  printf 'Unable to make %s writable (source=%s, fstype=%s, opts=%s, ro=%s).\n' \
+    "$rootmp" "${src:-unknown}" "${fstype:-unknown}" "${opts:-unknown}" "${ro_state:-unknown}"
   return 1
 }
 
