@@ -695,21 +695,21 @@ write_cfg_to_custom_dir() {
   log_debug "partsets source: ${partsets_source:-missing}"
 
   kernel_block=$(cat <<EOF
-    echo "DeckSB: root=\$root"
-    echo "DeckSB: linux ${STEAMOS_KERNEL_IMAGE} console=tty1 rd.luks=0 rd.lvm=0 rd.md=0 rd.dm=0 rd.systemd.gpt_auto=no log_buf_len=4M amd_iommu=off amdgpu.lockup_timeout=5000,10000,10000,5000 ttm.pages_min=2097152 amdgpu.sched_hw_submission=4 audit=0 fsck.mode=auto fsck.repair=preen fbcon=rotate:1 \$d_kv plymouth.ignore-serial-consoles fbcon=vc:4-6 noresume \$d_ar_r \$d_ar_e \$d_ar_v \$d_ar_h \$d_ar_s"
-    echo "DeckSB: initrd ${STEAMOS_INITRD_IMAGES}"
+    d_dbg "DeckSB: root=\$root"
+    d_dbg "DeckSB: linux ${STEAMOS_KERNEL_IMAGE} console=tty1 rd.luks=0 rd.lvm=0 rd.md=0 rd.dm=0 rd.systemd.gpt_auto=no log_buf_len=4M amd_iommu=off amdgpu.lockup_timeout=5000,10000,10000,5000 ttm.pages_min=2097152 amdgpu.sched_hw_submission=4 audit=0 fsck.mode=auto fsck.repair=preen fbcon=rotate:1 \$d_kv plymouth.ignore-serial-consoles fbcon=vc:4-6 noresume \$d_ar_r \$d_ar_e \$d_ar_v \$d_ar_h \$d_ar_s"
+    d_dbg "DeckSB: initrd ${STEAMOS_INITRD_IMAGES}"
     if [ -n "\$root" ]; then
         if [ -f "(\$root)${STEAMOS_KERNEL_IMAGE}" ]; then
-            echo "DeckSB: kernel ok ${STEAMOS_KERNEL_IMAGE}"
+            d_dbg "DeckSB: kernel ok ${STEAMOS_KERNEL_IMAGE}"
         else
-            echo "DeckSB: kernel missing ${STEAMOS_KERNEL_IMAGE}"
+            d_dbg "DeckSB: kernel missing ${STEAMOS_KERNEL_IMAGE}"
             ls (\$root)/boot/
         fi
         for deck_initrd in ${STEAMOS_INITRD_IMAGES}; do
             if [ -f "(\$root)\$deck_initrd" ]; then
-                echo "DeckSB: initrd ok \$deck_initrd"
+                d_dbg "DeckSB: initrd ok \$deck_initrd"
             else
-                echo "DeckSB: initrd missing \$deck_initrd"
+                d_dbg "DeckSB: initrd missing \$deck_initrd"
             fi
         done
     else
@@ -732,10 +732,10 @@ write_cfg_to_custom_dir() {
         fbcon=vc:4-6 \
         noresume \
         \$d_ar_r \$d_ar_e \$d_ar_v \$d_ar_h \$d_ar_s; then
-        echo "DeckSB: linux command loaded"
+        d_dbg "DeckSB: linux command loaded"
         if initrd ${STEAMOS_INITRD_IMAGES}; then
-            echo "DeckSB: initrd command loaded"
-            echo "DeckSB: executing boot"
+            d_dbg "DeckSB: initrd command loaded"
+            d_dbg "DeckSB: executing boot"
             boot
             echo "DeckSB: SteamOS update likely replaced the active kernel."
             echo "DeckSB: Secure Boot requires that updated kernel to be signed."
@@ -876,14 +876,6 @@ END { exit updated ? 0 : 1 }
   return 1
 }
 
-confirm_overwrite() {
-  local path="$1"
-  if [ ! -f "$path" ]; then
-    return 0
-  fi
-  deck_dialog --yesno "$(basename "$path") already exists at $(deck_display_path "$path").\nOverwrite it?" 10 70
-}
-
 purge_existing_boot_entries() {
   local label="$1"
   local line id
@@ -944,11 +936,7 @@ install_jump_loader() {
   custom_jump="$custom_dir/$TARGET_FILENAME"
   bootpng="$custom_dir/boot.png"
 
-  if ! confirm_overwrite "$custom_jump"; then
-    deck_dialog --infobox "Installation cancelled." 6 60
-    return 0
-  fi
-
+  deck_dialog --infobox "Installing jump loader..." 5 70
   if ! output=$(install -m 0644 "$JUMP_SOURCE" "$custom_jump" 2>&1); then
     sb_error "Failed to copy jump loader to $(deck_display_path "$custom_jump").\n\n$output" 12 80
     exit 1

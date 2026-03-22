@@ -61,5 +61,5 @@ sb_pending_mark enable
 
 sb_report "Keys enrolled: Deck SB + Microsoft" "$(printf '%s\n\n%s\n\n%s' \
   "$cleaned" \
-  "Next Step: Select 'Install Deck SB Jump Loader' from the menu to install the signed Deck SB EFI and boot menu entries. (Required for SteamOS to boot under Secure Boot.)" \
+  "Next Step: Select 'Install Deck SB EFI' from the menu to install the signed Deck SB EFI and boot menu entries. (Required for SteamOS to boot under Secure Boot.)" \
   "Reminder: Unsigned EFIs (including Clover) will NOT boot under Secure Boot until you sign them. Use the 'Signing Utility' from the menu to sign additional EFIs.")"

@@ -52,9 +52,9 @@ run_menu_action() {
 
 while true; do
   PEND=$(sb_pending_suffix)
-  JUMP_LABEL="Install Deck SB Jump Loader"
+  JUMP_LABEL="Install Deck SB EFI"
   if /root/deck-install-jump.sh --detect-installed >/dev/null 2>&1; then
-    JUMP_LABEL="Reinstall/Remove Deck SB Jump Loader"
+    JUMP_LABEL="Reinstall/Resign/Remove Deck SB EFI"
   fi
   MENU_ITEMS=(
     1 "Check Boot Status${PEND}"
@@ -86,15 +86,15 @@ while true; do
     3)
       if /root/deck-install-jump.sh --detect-installed >/dev/null 2>&1; then
         SUB=$(deck_dialog --clear --stdout --default-item 1 \
-          --menu "Deck SB Jump Loader" 0 0 0 \
-          1 "Reinstall jump loader" \
-          2 "Remove jump loader") || continue
+          --menu "Deck SB EFI" 0 0 0 \
+          1 "Reinstall Deck SB EFI" \
+          2 "Remove Deck SB EFI") || continue
         case "$SUB" in
-          1) run_menu_action "Reinstall jump loader" /root/deck-install-jump.sh ;;
-          2) run_menu_action "Remove jump loader" /root/deck-install-jump.sh --remove ;;
+          1) run_menu_action "Reinstall Deck SB EFI" /root/deck-install-jump.sh ;;
+          2) run_menu_action "Remove Deck SB EFI" /root/deck-install-jump.sh --remove ;;
         esac
       else
-        run_menu_action "Install jump loader" /root/deck-install-jump.sh
+        run_menu_action "Install Deck SB EFI" /root/deck-install-jump.sh
       fi
       ;;
     4) run_menu_action "Install Deck SB ISO" /root/deck-install-iso.sh ;;

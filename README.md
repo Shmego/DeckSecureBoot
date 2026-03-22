@@ -2,15 +2,11 @@
 
 [![](https://github.com/downthecrop/misc/blob/main/branding.png?raw=true)](https://github.com/downthecrop/DeckSecureBoot/releases/latest)
 # Steam Deck Secure Boot (Deck SB)
-**Status:** Beta 1.7
+**Status:** Beta 2.0
 
 Arch-based live ISO for Enabling Secure Boot the Steam Deck (LCD and OLED)
 
 [![Download](https://img.shields.io/badge/Download-latest-brightgreen?style=for-the-badge&logo=github)](https://github.com/downthecrop/DeckSecureBoot/releases/latest)
-
-
-##########
-codex resume 019bcd47-6115-7092-b19f-3cc436c758aa
 
 ## Features
 
@@ -43,16 +39,15 @@ The Deck never shows a “turn on Secure Boot” toggle inside its UEFI UI, but 
 
 ## Helpful information & FAQ
 
+**Will updates still work under Secure Boot?**  Yes. However, new updates will come with a new kernel. If you don't install the ISO to disk you will need to resign with the USB again.
+
+**Does this modify SteamOS?** The OS rootfs, kernel, and userspace remain untouched. If you choose to **install** the ISO to disk from the menu, we also drop a copy of the live ISO environment on SteamOS (~400MB) so you can easily toggle SecureBoot and resign kernels in the future without the USB.
+
+**SteamOS stopped booting under Secure Boot!**  A SteamOS update probably bumped the kernel or initrd filenames. Re-run the EFI installer option from the menu; it re-parses the official SteamOS GRUB config and refreshes the arguments so the Deck SB loader tracks the new assets automatically.
+
 - **Clover note:** Clover removes the Deck SB Jump loader entry from the Deck’s Boot Manager (`Vol-` + `Power`). Use `Vol+` + `Power`, pick **Boot From File**, then load `/efi/deck-sb/jump.efi` to load it manually if you get stuck.
 - **Signing other OSes:** Any EFI loader or kernel you want to boot with Secure Boot enabled must be signed. Use the Signing Utility to add signatures for every distro you keep on the internal drive.
 - **GRUB Secure Boot policy warnings:** Some distros ship GRUB with `grubshim` (SteamOS GRUB has this too), which complains under Secure Boot. That’s why we rely on our custom jump loader instead.
-
-**Does this modify SteamOS?**  We drop a tiny systemd service whose only job is to ensure the Deck SB bootloader entry gets re-added if SteamOS updates wipe it. The OS rootfs, kernel, and userspace remain untouched. If you choose to **install** the ISO to disk from the menu, we also drop a copy of the live ISO environment on SteamOS (~400MB) so you can easily toggle SecureBoot in the future without the USB.
-
-**Will updates still work under Secure Boot?**  Yes. SteamOS keeps its original GRUB entry and kernel images in the EFI partition. We install an additional boot option without overwriting any existing bootloaders.
-
-**SteamOS stopped booting under Secure Boot!**  A recent SteamOS update probably bumped the kernel or initrd filenames. Re-run the EFI installer option from the menu; it re-parses the official SteamOS GRUB config and refreshes the arguments so the Deck SB loader tracks the new assets automatically.
-
 ---
 
 ## Repo layout
@@ -214,7 +209,7 @@ docker run --rm -it \
   --platform=linux/amd64 \
   --privileged \
   -v $(pwd):/work \
-  -v $(pwd)/iso-out:/out \ (Change this to home)
+  -v $(pwd)/iso-out:/out \
   archlinux:base-20251221.0.472429 \
   /bin/bash
 
@@ -232,7 +227,7 @@ cd DeckSecureBoot
 2. Hold **Volume -** and press **Power**
 3. Pick the USB you flashed the ISO to
 
-> If you choose to install the ISO to disk in the menu (optional) it will appear in the DeckSB Jumploader (jump.efi)
+> If you choose to install the ISO to disk in the menu (optional but recommended for resigning future kernels) it will appear in the DeckSB Jumploader Grub
 ---
 
 ## Credits

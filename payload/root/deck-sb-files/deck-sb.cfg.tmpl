@@ -89,6 +89,12 @@ set d_bn=
 set d_gdbg=__DECK_SB_DEBUG__
 set d_fsl=
 
+function d_dbg {
+    if [ x$d_gdbg = x1 ]; then
+        echo "$@"
+    fi
+}
+
 function d_rf_set {
     if [ x$d_pt = xself ]; then
         set d_rf_u=$1
@@ -163,6 +169,9 @@ function d_ap_ps {
 }
 
 function d_dbg_ps {
+    if [ x$d_gdbg != x1 ]; then
+        return
+    fi
     if [ x$d_ps_src != x ]; then
         echo "DeckSB: partset src $d_ps_src"
     fi
@@ -244,7 +253,7 @@ function d_try_psr {
     fi
     if [ -f "($d_pr)$d_ps_p/$d_pt" ]; then
         if d_try_psf "($d_pr)$d_ps_p/$d_pt"; then
-            echo "DeckSB: loaded partset $d_pt from $d_ps_p/$d_pt"
+            d_dbg "DeckSB: loaded partset $d_pt from $d_ps_p/$d_pt"
             return 0
         fi
         echo "DeckSB: failed to parse $d_ps_p/$d_pt"
@@ -277,7 +286,7 @@ function d_ld_ps {
     if [ x$d_ps_p = x ]; then
         set d_ps_p=/SteamOS/partsets
     fi
-    echo "DeckSB: trying partset target $d_pt"
+    d_dbg "DeckSB: trying partset target $d_pt"
     if d_try_psh $d_ps_p; then
         return
     fi
@@ -327,16 +336,10 @@ function d_ld_cf {
         set prefix=
     fi
     if [ x$d_sl != x ]; then
-        if [ x$d_rs != x ]; then
-            echo "DeckSB: bootconf slot $d_sl ($d_rs)"
-        else
-            echo "DeckSB: bootconf slot $d_sl"
-        fi
+        d_dbg "DeckSB: bootconf slot $d_sl"
+        d_dbg "DeckSB: bootconf reason $d_rs"
     else
         echo "DeckSB: bootconf missing"
-    fi
-    if [ x$d_rs != x ]; then
-        echo "DeckSB: bootconf reason $d_rs"
     fi
     if [ x$d_a_sf = x ]; then
         set d_a_sf_v=0
@@ -388,8 +391,8 @@ function d_ld_cf {
     else
         set d_b_ct_v=$d_b_ct
     fi
-    echo "DeckSB: conf A rq=$d_a_rq_v tm=$d_a_tm_v ct=$d_a_ct_v self=$d_a_sf_v mode=$d_a_md_v"
-    echo "DeckSB: conf B rq=$d_b_rq_v tm=$d_b_tm_v ct=$d_b_ct_v self=$d_b_sf_v mode=$d_b_md_v"
+    d_dbg "DeckSB: conf A rq=$d_a_rq_v tm=$d_a_tm_v ct=$d_a_ct_v self=$d_a_sf_v mode=$d_a_md_v"
+    d_dbg "DeckSB: conf B rq=$d_b_rq_v tm=$d_b_tm_v ct=$d_b_ct_v self=$d_b_sf_v mode=$d_b_md_v"
 }
 
 function d_res_rf {
@@ -426,51 +429,48 @@ function d_res_rf {
     if [ x$d_fsl = xA ]; then
         set d_sl=$d_fsl
         set d_rs=forced
-        echo "DeckSB: forcing slot $d_sl"
+        d_dbg "DeckSB: forcing slot $d_sl"
     elif [ x$d_fsl = xB ]; then
         set d_sl=$d_fsl
         set d_rs=forced
-        echo "DeckSB: forcing slot $d_sl"
+        d_dbg "DeckSB: forcing slot $d_sl"
     fi
 
     if [ x$d_sl != x ]; then
-        if [ x$d_rs != x ]; then
-            echo "DeckSB: slot preference $d_sl via $d_rs"
-        else
-            echo "DeckSB: slot preference $d_sl"
-        fi
+        d_dbg "DeckSB: slot preference $d_sl"
+        d_dbg "DeckSB: slot preference reason $d_rs"
     else
-        echo "DeckSB: slot preference unavailable"
+        d_dbg "DeckSB: slot preference unavailable"
     fi
 
     if [ x$d_src_s != x ]; then
-        echo "DeckSB: source self $d_src_s"
+        d_dbg "DeckSB: source self $d_src_s"
     fi
     if [ x$d_src_a != x ]; then
-        echo "DeckSB: source A $d_src_a"
+        d_dbg "DeckSB: source A $d_src_a"
     fi
     if [ x$d_src_b != x ]; then
-        echo "DeckSB: source B $d_src_b"
+        d_dbg "DeckSB: source B $d_src_b"
     fi
     if [ x$d_src_all != x ]; then
-        echo "DeckSB: source all $d_src_all"
+        d_dbg "DeckSB: source all $d_src_all"
     fi
     if [ x$d_src_sh != x ]; then
-        echo "DeckSB: source shared $d_src_sh"
+        d_dbg "DeckSB: source shared $d_src_sh"
     fi
 
     if [ x$d_rf_u != x ]; then
-        echo "DeckSB: self rootfs $d_rf_u"
+        d_dbg "DeckSB: self rootfs $d_rf_u"
     else
         echo "DeckSB: self rootfs missing"
     fi
     if [ x$d_ra_u != x ]; then
-        echo "DeckSB: A rootfs $d_ra_u"
+        d_dbg "DeckSB: A rootfs $d_ra_u"
     else
         echo "DeckSB: A rootfs missing"
     fi
     if [ x$d_rb_u != x ]; then
-        echo "DeckSB: B rootfs $d_rb_u"
+        d_dbg "DeckSB: B rootfs $d_rb_u"
     else
         echo "DeckSB: B rootfs missing"
     fi
@@ -515,10 +515,10 @@ function d_res_rf {
         set d_vr_u=
     fi
 
-    echo "DeckSB: map A rootfs=$d_ra_u efi=$d_ef_a var=$d_vr_a"
-    echo "DeckSB: map B rootfs=$d_rb_u efi=$d_ef_b var=$d_vr_b"
-    echo "DeckSB: map shared home=$d_hm esp=$d_ep"
-    echo "DeckSB: chosen slot=$d_lbl efi=$d_ef_u var=$d_vr_u home=$d_hm esp=$d_ep"
+    d_dbg "DeckSB: map A rootfs=$d_ra_u efi=$d_ef_a var=$d_vr_a"
+    d_dbg "DeckSB: map B rootfs=$d_rb_u efi=$d_ef_b var=$d_vr_b"
+    d_dbg "DeckSB: map shared home=$d_hm esp=$d_ep"
+    d_dbg "DeckSB: chosen slot=$d_lbl efi=$d_ef_u var=$d_vr_u home=$d_hm esp=$d_ep"
 
     if [ x$d_rf_u != x ]; then
         set d_ar_r="root=PARTUUID=$d_rf_u"
@@ -547,35 +547,35 @@ function d_res_rf {
     fi
 
     if [ x$d_ar_r != x ]; then
-        echo "DeckSB: root arg $d_ar_r"
+        d_dbg "DeckSB: root arg $d_ar_r"
     else
-        echo "DeckSB: root arg missing"
+        d_dbg "DeckSB: root arg missing"
     fi
     if [ x$d_ar_e != x ]; then
-        echo "DeckSB: efi arg $d_ar_e"
+        d_dbg "DeckSB: efi arg $d_ar_e"
     else
-        echo "DeckSB: efi arg missing"
+        d_dbg "DeckSB: efi arg missing"
     fi
     if [ x$d_ar_v != x ]; then
-        echo "DeckSB: var arg $d_ar_v"
+        d_dbg "DeckSB: var arg $d_ar_v"
     else
-        echo "DeckSB: var arg missing"
+        d_dbg "DeckSB: var arg missing"
     fi
     if [ x$d_ar_h != x ]; then
-        echo "DeckSB: home arg $d_ar_h"
+        d_dbg "DeckSB: home arg $d_ar_h"
     else
-        echo "DeckSB: home arg missing"
+        d_dbg "DeckSB: home arg missing"
     fi
     if [ x$d_ar_s != x ]; then
-        echo "DeckSB: esp arg $d_ar_s"
+        d_dbg "DeckSB: esp arg $d_ar_s"
     else
-        echo "DeckSB: esp arg missing"
+        d_dbg "DeckSB: esp arg missing"
     fi
 
     if [ x$d_rf_u != x ]; then
         d_rr $d_rf_u root
         if [ x$root != x ]; then
-            echo "DeckSB: root set via partuuid $d_rf_u ($root)"
+            d_dbg "DeckSB: root set via partuuid $d_rf_u ($root)"
             set d_rdy=1
         else
             echo "DeckSB: unable to resolve partuuid $d_rf_u"
@@ -746,31 +746,33 @@ if search --file $deck_iso_file --set=deck_iso_probe; then
             fi
         fi
         if [ -n "$deck_iso_uuid" ]; then
-            echo 'Deck SB on-disk debug:'
-            echo "  device: $deck_iso"
-            echo "  uuid:   $deck_iso_uuid"
-            set deck_iso_kernel="/usr/local/share/deck-sb/arch/boot/x86_64/vmlinuz-linux"
-            set deck_iso_initrd="/usr/local/share/deck-sb/arch/boot/x86_64/initramfs-linux.img"
-            set deck_iso_sfs="/usr/local/share/deck-sb/arch/x86_64/airootfs.sfs"
-            if [ -f "($deck_iso)$deck_iso_kernel" ]; then
-                echo "  kernel: ($deck_iso)$deck_iso_kernel [OK]"
-            else
-                echo "  kernel: ($deck_iso)$deck_iso_kernel [MISSING]"
+            if [ x$d_gdbg = x1 ]; then
+                echo 'Deck SB on-disk debug:'
+                echo "  device: $deck_iso"
+                echo "  uuid:   $deck_iso_uuid"
+                set deck_iso_kernel="/usr/local/share/deck-sb/arch/boot/x86_64/vmlinuz-linux"
+                set deck_iso_initrd="/usr/local/share/deck-sb/arch/boot/x86_64/initramfs-linux.img"
+                set deck_iso_sfs="/usr/local/share/deck-sb/arch/x86_64/airootfs.sfs"
+                if [ -f "($deck_iso)$deck_iso_kernel" ]; then
+                    echo "  kernel: ($deck_iso)$deck_iso_kernel [OK]"
+                else
+                    echo "  kernel: ($deck_iso)$deck_iso_kernel [MISSING]"
+                fi
+                if [ -f "($deck_iso)$deck_iso_initrd" ]; then
+                    echo "  initrd: ($deck_iso)$deck_iso_initrd [OK]"
+                else
+                    echo "  initrd: ($deck_iso)$deck_iso_initrd [MISSING]"
+                fi
+                echo "  archisobasedir=usr/local/share/deck-sb/arch"
+                echo "  archisodevice=$deck_iso_devpath"
+                echo "  img_dev=$deck_iso_devpath"
+                if [ -f "($deck_iso)$deck_iso_sfs" ]; then
+                    echo "  img_loop: ($deck_iso)$deck_iso_sfs [OK]"
+                else
+                    echo "  img_loop: ($deck_iso)$deck_iso_sfs [MISSING]"
+                fi
+                sleep 3
             fi
-            if [ -f "($deck_iso)$deck_iso_initrd" ]; then
-                echo "  initrd: ($deck_iso)$deck_iso_initrd [OK]"
-            else
-                echo "  initrd: ($deck_iso)$deck_iso_initrd [MISSING]"
-            fi
-            echo "  archisobasedir=usr/local/share/deck-sb/arch"
-            echo "  archisodevice=$deck_iso_devpath"
-            echo "  img_dev=$deck_iso_devpath"
-            if [ -f "($deck_iso)$deck_iso_sfs" ]; then
-                echo "  img_loop: ($deck_iso)$deck_iso_sfs [OK]"
-            else
-                echo "  img_loop: ($deck_iso)$deck_iso_sfs [MISSING]"
-            fi
-            sleep 3
             linux ($deck_iso)/usr/local/share/deck-sb/arch/boot/x86_64/vmlinuz-linux archisobasedir=usr/local/share/deck-sb/arch archisodevice=$deck_iso_devpath img_dev=$deck_iso_devpath img_loop=/usr/local/share/deck-sb/arch/x86_64/airootfs.sfs copytoram=n
             initrd ($deck_iso)/usr/local/share/deck-sb/arch/boot/x86_64/initramfs-linux.img
         else

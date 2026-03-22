@@ -20,7 +20,7 @@ if [ "$CHANGED" -eq 1 ]; then
   sb_pending_mark disable
   sb_report "Secure Boot vars cleared" "$(printf '%s\n\n%s' \
     "Reboot to confirm." \
-    "To fully remove Deck SB, choose 'Reinstall/Remove Deck SB Jump Loader' from the menu to remove the boot entry.")"
+    "To fully remove Deck SB, choose 'Reinstall/Resign/Remove Deck SB EFI' from the menu to remove the boot entry.")"
 else
   sb_report "No changes" "No Secure Boot vars were cleared (nothing changed)."
 fi
