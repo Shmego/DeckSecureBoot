@@ -36,244 +36,619 @@ set color_special=light-cyan/black
 set color_title=cyan/black
 set color_border=cyan/black
 
-if [ -n "$grub_platform" ] && [ "$terminal_output" = "gfxterm" ]; then
-    echo 'Deck Secure Boot GRUB ready.'
+if [ -n "$grub_platform" ]; then
+    if [ "$terminal_output" = "gfxterm" ]; then
+        echo 'Deck Secure Boot GRUB ready.'
+    fi
 fi
 
 set menu_label='Deck Secure Boot Loader'
 
-set deck_rootfs_uuid=
-set deck_rootfs_a_uuid=
-set deck_rootfs_b_uuid=
-set deck_rootfs_a_fsuuid=__DECK_SB_ROOTFS_A_FSUUID__
-set deck_rootfs_b_fsuuid=__DECK_SB_ROOTFS_B_FSUUID__
-set deck_rootfs_label=
-set deck_rootfs_ready=
-set deck_partset_target=
-set deck_partset_efi_a=
-set deck_partset_efi_b=
-set deck_partset_var_a=
-set deck_partset_var_b=
-set deck_partset_home=
-set deck_partset_esp=
-set deck_efi_uuid=
-set deck_var_uuid=
-set deck_root_arg=
-set deck_efi_arg=
-set deck_var_arg=
-set deck_home_arg=
-set deck_esp_arg=
+set d_sl=
+set d_rs=
+set d_cr=
+set d_rf_u=
+set d_ra_u=
+set d_rb_u=
+set d_ps_p=/SteamOS/partsets
+set d_lbl=
+set d_rdy=
+set d_pt=
+set d_pr=
+set d_ef_s=
+set d_ef_a=
+set d_ef_b=
+set d_vr_s=
+set d_vr_a=
+set d_vr_b=
+set d_hm=
+set d_ep=
+set d_src_s=
+set d_src_a=
+set d_src_b=
+set d_src_all=
+set d_src_sh=
+set d_ef_u=
+set d_vr_u=
+set d_ar_r=
+set d_ar_e=
+set d_ar_v=
+set d_ar_h=
+set d_ar_s=
+set d_a_rq=
+set d_a_tm=
+set d_a_ct=
+set d_b_rq=
+set d_b_tm=
+set d_b_ct=
+set d_a_sf=
+set d_b_sf=
+set d_a_md=
+set d_b_md=
+set d_bn=
+set d_gdbg=__DECK_SB_DEBUG__
+set d_fsl=
 
-function rootfs {
-    if [ x$deck_partset_target = xself ]; then
-        set deck_rootfs_uuid=$1
-    elif [ x$deck_partset_target = xA ]; then
-        set deck_rootfs_a_uuid=$1
-    elif [ x$deck_partset_target = xB ]; then
-        set deck_rootfs_b_uuid=$1
+function d_dbg {
+    if [ x$d_gdbg = x1 ]; then
+        echo "$@"
     fi
 }
 
-function efi {
-    if [ x$deck_partset_target = xself ]; then
-        set deck_partset_efi=$1
-    elif [ x$deck_partset_target = xA ]; then
-        set deck_partset_efi_a=$1
-    elif [ x$deck_partset_target = xB ]; then
-        set deck_partset_efi_b=$1
+function d_rf_set {
+    if [ x$d_pt = xself ]; then
+        set d_rf_u=$1
+    elif [ x$d_pt = xA ]; then
+        set d_ra_u=$1
+    elif [ x$d_pt = xB ]; then
+        set d_rb_u=$1
     fi
 }
 
-function var {
-    if [ x$deck_partset_target = xself ]; then
-        set deck_partset_var=$1
-    elif [ x$deck_partset_target = xA ]; then
-        set deck_partset_var_a=$1
-    elif [ x$deck_partset_target = xB ]; then
-        set deck_partset_var_b=$1
+function d_ef_set {
+    if [ x$d_pt = xself ]; then
+        set d_ef_s=$1
+    elif [ x$d_pt = xA ]; then
+        set d_ef_a=$1
+    elif [ x$d_pt = xB ]; then
+        set d_ef_b=$1
     fi
 }
 
-function home {
-    if [ x$deck_partset_home = x ]; then
-        set deck_partset_home=$1
+function d_vr_set {
+    if [ x$d_pt = xself ]; then
+        set d_vr_s=$1
+    elif [ x$d_pt = xA ]; then
+        set d_vr_a=$1
+    elif [ x$d_pt = xB ]; then
+        set d_vr_b=$1
     fi
 }
 
-function esp {
-    if [ x$deck_partset_esp = x ]; then
-        set deck_partset_esp=$1
+function d_hm_set {
+    if [ x$d_hm = x ]; then
+        set d_hm=$1
     fi
 }
 
-function decksb_load_partset {
-    set deck_partset_target=$1
-    if search --file /SteamOS/partsets/$1 --set=deck_partset_root; then
-        if source ($deck_partset_root)/SteamOS/partsets/$1; then
-            echo "DeckSB: loaded partset $1 from /SteamOS/partsets/$1"
+function d_ep_set {
+    if [ x$d_ep = x ]; then
+        set d_ep=$1
+    fi
+}
+
+function d_ap_ps {
+    if [ x$d_ps_src != x ]; then
+        if [ x$d_pt = xself ]; then
+            set d_src_s=$d_ps_src
+        elif [ x$d_pt = xA ]; then
+            set d_src_a=$d_ps_src
+        elif [ x$d_pt = xB ]; then
+            set d_src_b=$d_ps_src
+        elif [ x$d_pt = xall ]; then
+            set d_src_all=$d_ps_src
+        elif [ x$d_pt = xshared ]; then
+            set d_src_sh=$d_ps_src
+        fi
+    fi
+    if [ x$d_ps_rf != x ]; then
+        d_rf_set $d_ps_rf
+    fi
+    if [ x$d_ps_ef != x ]; then
+        d_ef_set $d_ps_ef
+    fi
+    if [ x$d_ps_vr != x ]; then
+        d_vr_set $d_ps_vr
+    fi
+    if [ x$d_ps_hm != x ]; then
+        d_hm_set $d_ps_hm
+    fi
+    if [ x$d_ps_ep != x ]; then
+        d_ep_set $d_ps_ep
+    fi
+}
+
+function d_dbg_ps {
+    if [ x$d_gdbg != x1 ]; then
+        return
+    fi
+    if [ x$d_ps_src != x ]; then
+        echo "DeckSB: partset src $d_ps_src"
+    fi
+    if [ x$d_pt = xshared ]; then
+        if [ x$d_ps_hm != x ]; then
+            echo "DeckSB: partset home $d_ps_hm"
         else
-            echo "DeckSB: failed to parse /SteamOS/partsets/$1"
+            echo "DeckSB: partset home missing (shared)"
+        fi
+        if [ x$d_ps_ep != x ]; then
+            echo "DeckSB: partset esp $d_ps_ep"
+        else
+            echo "DeckSB: partset esp missing (shared)"
         fi
         return
-    elif search --file /EFI/SteamOS/partsets/$1 --set=deck_partset_root; then
-        if source ($deck_partset_root)/EFI/SteamOS/partsets/$1; then
-            echo "DeckSB: loaded partset $1 from /EFI/SteamOS/partsets/$1"
+    fi
+    if [ x$d_pt = xall ]; then
+        if [ x$d_ps_hm != x ]; then
+            echo "DeckSB: partset home $d_ps_hm"
         else
-            echo "DeckSB: failed to parse /EFI/SteamOS/partsets/$1"
+            echo "DeckSB: partset home missing (all)"
         fi
-        return
-    elif search --file /efi/SteamOS/partsets/$1 --set=deck_partset_root; then
-        if source ($deck_partset_root)/efi/SteamOS/partsets/$1; then
-            echo "DeckSB: loaded partset $1 from /efi/SteamOS/partsets/$1"
+        if [ x$d_ps_ep != x ]; then
+            echo "DeckSB: partset esp $d_ps_ep"
         else
-            echo "DeckSB: failed to parse /efi/SteamOS/partsets/$1"
+            echo "DeckSB: partset esp missing (all)"
+        fi
+        if [ x$d_ps_rf != x ]; then
+            echo "DeckSB: partset rootfs aggregate $d_ps_rf"
+        fi
+        if [ x$d_ps_ef != x ]; then
+            echo "DeckSB: partset efi aggregate $d_ps_ef"
+        fi
+        if [ x$d_ps_vr != x ]; then
+            echo "DeckSB: partset var aggregate $d_ps_vr"
         fi
         return
     fi
-    echo "DeckSB: partset $1 not found"
+
+    if [ x$d_ps_rf != x ]; then
+        echo "DeckSB: partset rootfs $d_ps_rf"
+    else
+        echo "DeckSB: partset rootfs missing ($d_pt)"
+    fi
+    if [ x$d_ps_ef != x ]; then
+        echo "DeckSB: partset efi $d_ps_ef"
+    else
+        echo "DeckSB: partset efi missing ($d_pt)"
+    fi
+    if [ x$d_ps_vr != x ]; then
+        echo "DeckSB: partset var $d_ps_vr"
+    else
+        echo "DeckSB: partset var missing ($d_pt)"
+    fi
+    if [ x$d_ps_hm != x ]; then
+        echo "DeckSB: partset home $d_ps_hm"
+    fi
+    if [ x$d_ps_ep != x ]; then
+        echo "DeckSB: partset esp $d_ps_ep"
+    fi
 }
 
-function decksb_resolve_rootfs {
-    set deck_rootfs_uuid=
-    set deck_rootfs_a_uuid=
-    set deck_rootfs_b_uuid=
-    set deck_rootfs_label=
-    set deck_rootfs_ready=
+function d_try_psf {
+    if [ x$1 = x ]; then
+        return 1
+    fi
+    d_ps $1
+    if [ x$d_ps_ok = x1 ]; then
+        d_ap_ps
+        d_dbg_ps
+        return 0
+    fi
+    return 1
+}
 
-    decksb_load_partset self
-    decksb_load_partset A
-    decksb_load_partset B
-    decksb_load_partset all
-    decksb_load_partset shared
+function d_try_psr {
+    if [ x$d_pr = x ]; then
+        return 1
+    fi
+    if [ -f "($d_pr)$d_ps_p/$d_pt" ]; then
+        if d_try_psf "($d_pr)$d_ps_p/$d_pt"; then
+            d_dbg "DeckSB: loaded partset $d_pt from $d_ps_p/$d_pt"
+            return 0
+        fi
+        echo "DeckSB: failed to parse $d_ps_p/$d_pt"
+    fi
+    return 1
+}
 
-    if [ x$deck_rootfs_uuid != x ]; then
-        echo "DeckSB: self rootfs $deck_rootfs_uuid"
+function d_try_psh {
+    if [ x$1 = x ]; then
+        return 1
+    fi
+    if search --no-floppy --file $1/$d_pt --set=d_pr; then
+        set d_ps_p=$1
+        if d_try_psr; then
+            return 0
+        fi
+    fi
+    return 1
+}
+
+function d_ld_ps {
+    if [ x$1 != x ]; then
+        set d_pt=$1
+    fi
+    set d_pr=
+    if [ x$d_pt = x ]; then
+        echo "DeckSB: partset target missing"
+        return
+    fi
+    if [ x$d_ps_p = x ]; then
+        set d_ps_p=/SteamOS/partsets
+    fi
+    d_dbg "DeckSB: trying partset target $d_pt"
+    if d_try_psh $d_ps_p; then
+        return
+    fi
+    if [ x$d_ps_p != x/SteamOS/partsets ]; then
+        if d_try_psh /SteamOS/partsets; then
+            return
+        fi
+    fi
+    if [ x$d_ps_p != x/EFI/SteamOS/partsets ]; then
+        if d_try_psh /EFI/SteamOS/partsets; then
+            return
+        fi
+    fi
+    if [ x$d_ps_p != x/efi/SteamOS/partsets ]; then
+        if d_try_psh /efi/SteamOS/partsets; then
+            return
+        fi
+    fi
+    if [ x$d_pr != x ]; then
+        echo "DeckSB: partset $d_pt parse failed on $d_pr"
+    else
+        echo "DeckSB: partset $d_pt not found"
+    fi
+}
+
+function d_ld_cf {
+    set d_sl=
+    set d_rs=
+    set d_cr=
+    set d_sr=$root
+    set d_sp=$prefix
+    if search --no-floppy --file /SteamOS/conf/A.conf --set=d_cr; then
+        d_cf ($d_cr)/SteamOS/conf
+    elif search --no-floppy --file /EFI/SteamOS/conf/A.conf --set=d_cr; then
+        d_cf ($d_cr)/EFI/SteamOS/conf
+    elif search --no-floppy --file /efi/SteamOS/conf/A.conf --set=d_cr; then
+        d_cf ($d_cr)/efi/SteamOS/conf
+    fi
+    if [ x$d_sr != x ]; then
+        set root=$d_sr
+    else
+        set root=
+    fi
+    if [ x$d_sp != x ]; then
+        set prefix=$d_sp
+    else
+        set prefix=
+    fi
+    if [ x$d_sl != x ]; then
+        d_dbg "DeckSB: bootconf slot $d_sl"
+        d_dbg "DeckSB: bootconf reason $d_rs"
+    else
+        echo "DeckSB: bootconf missing"
+    fi
+    if [ x$d_a_sf = x ]; then
+        set d_a_sf_v=0
+    else
+        set d_a_sf_v=$d_a_sf
+    fi
+    if [ x$d_b_sf = x ]; then
+        set d_b_sf_v=0
+    else
+        set d_b_sf_v=$d_b_sf
+    fi
+    if [ x$d_a_md = x ]; then
+        set d_a_md_v=na
+    else
+        set d_a_md_v=$d_a_md
+    fi
+    if [ x$d_b_md = x ]; then
+        set d_b_md_v=na
+    else
+        set d_b_md_v=$d_b_md
+    fi
+    if [ x$d_a_rq = x ]; then
+        set d_a_rq_v=0
+    else
+        set d_a_rq_v=$d_a_rq
+    fi
+    if [ x$d_a_tm = x ]; then
+        set d_a_tm_v=0
+    else
+        set d_a_tm_v=$d_a_tm
+    fi
+    if [ x$d_a_ct = x ]; then
+        set d_a_ct_v=0
+    else
+        set d_a_ct_v=$d_a_ct
+    fi
+    if [ x$d_b_rq = x ]; then
+        set d_b_rq_v=0
+    else
+        set d_b_rq_v=$d_b_rq
+    fi
+    if [ x$d_b_tm = x ]; then
+        set d_b_tm_v=0
+    else
+        set d_b_tm_v=$d_b_tm
+    fi
+    if [ x$d_b_ct = x ]; then
+        set d_b_ct_v=0
+    else
+        set d_b_ct_v=$d_b_ct
+    fi
+    d_dbg "DeckSB: conf A rq=$d_a_rq_v tm=$d_a_tm_v ct=$d_a_ct_v self=$d_a_sf_v mode=$d_a_md_v"
+    d_dbg "DeckSB: conf B rq=$d_b_rq_v tm=$d_b_tm_v ct=$d_b_ct_v self=$d_b_sf_v mode=$d_b_md_v"
+}
+
+function d_res_rf {
+    if [ x$1 != xgo ]; then
+        return
+    fi
+    if [ x$d_bn != x1 ]; then
+        return
+    fi
+    set d_bn=
+    set d_rf_u=
+    set d_ra_u=
+    set d_rb_u=
+    set d_lbl=
+    set d_rdy=
+    set d_src_s=
+    set d_src_a=
+    set d_src_b=
+    set d_src_all=
+    set d_src_sh=
+
+    set d_pt=self
+    d_ld_ps
+    set d_pt=A
+    d_ld_ps
+    set d_pt=B
+    d_ld_ps
+    set d_pt=all
+    d_ld_ps
+    set d_pt=shared
+    d_ld_ps
+    d_ld_cf
+
+    if [ x$d_fsl = xA ]; then
+        set d_sl=$d_fsl
+        set d_rs=forced
+        d_dbg "DeckSB: forcing slot $d_sl"
+    elif [ x$d_fsl = xB ]; then
+        set d_sl=$d_fsl
+        set d_rs=forced
+        d_dbg "DeckSB: forcing slot $d_sl"
+    fi
+
+    if [ x$d_sl != x ]; then
+        d_dbg "DeckSB: slot preference $d_sl"
+        d_dbg "DeckSB: slot preference reason $d_rs"
+    else
+        d_dbg "DeckSB: slot preference unavailable"
+    fi
+
+    if [ x$d_src_s != x ]; then
+        d_dbg "DeckSB: source self $d_src_s"
+    fi
+    if [ x$d_src_a != x ]; then
+        d_dbg "DeckSB: source A $d_src_a"
+    fi
+    if [ x$d_src_b != x ]; then
+        d_dbg "DeckSB: source B $d_src_b"
+    fi
+    if [ x$d_src_all != x ]; then
+        d_dbg "DeckSB: source all $d_src_all"
+    fi
+    if [ x$d_src_sh != x ]; then
+        d_dbg "DeckSB: source shared $d_src_sh"
+    fi
+
+    if [ x$d_rf_u != x ]; then
+        d_dbg "DeckSB: self rootfs $d_rf_u"
     else
         echo "DeckSB: self rootfs missing"
     fi
-    if [ x$deck_rootfs_a_uuid != x ]; then
-        echo "DeckSB: A rootfs $deck_rootfs_a_uuid"
+    if [ x$d_ra_u != x ]; then
+        d_dbg "DeckSB: A rootfs $d_ra_u"
     else
         echo "DeckSB: A rootfs missing"
     fi
-    if [ x$deck_rootfs_b_uuid != x ]; then
-        echo "DeckSB: B rootfs $deck_rootfs_b_uuid"
+    if [ x$d_rb_u != x ]; then
+        d_dbg "DeckSB: B rootfs $d_rb_u"
     else
         echo "DeckSB: B rootfs missing"
     fi
 
-    if [ x$deck_rootfs_uuid != x ]; then
-        if [ x$deck_rootfs_uuid = x$deck_rootfs_a_uuid ]; then
-            set deck_rootfs_label=A
-        elif [ x$deck_rootfs_uuid = x$deck_rootfs_b_uuid ]; then
-            set deck_rootfs_label=B
+    if [ x$d_sl = xA ]; then
+        if [ x$d_ra_u != x ]; then
+            set d_lbl=A
+        fi
+    elif [ x$d_sl = xB ]; then
+        if [ x$d_rb_u != x ]; then
+            set d_lbl=B
+        fi
+    elif [ x$d_rf_u != x ]; then
+        if [ x$d_rf_u = x$d_ra_u ]; then
+            set d_lbl=A
+        elif [ x$d_rf_u = x$d_rb_u ]; then
+            set d_lbl=B
         else
-            set deck_rootfs_label=?
+            set d_lbl=?
         fi
     fi
-    if [ x$deck_rootfs_label != x ]; then
-        echo "Booting SteamOS $deck_rootfs_label..."
+    if [ x$d_lbl != x ]; then
+        echo "Booting SteamOS $d_lbl..."
     else
         echo "Booting SteamOS..."
     fi
 
-    if [ x$deck_rootfs_label = xA ]; then
-        set deck_efi_uuid=$deck_partset_efi_a
-        set deck_var_uuid=$deck_partset_var_a
-    elif [ x$deck_rootfs_label = xB ]; then
-        set deck_efi_uuid=$deck_partset_efi_b
-        set deck_var_uuid=$deck_partset_var_b
+    if [ x$d_lbl = xA ]; then
+        if [ x$d_ra_u != x ]; then
+            set d_rf_u=$d_ra_u
+        fi
+        set d_ef_u=$d_ef_a
+        set d_vr_u=$d_vr_a
+    elif [ x$d_lbl = xB ]; then
+        if [ x$d_rb_u != x ]; then
+            set d_rf_u=$d_rb_u
+        fi
+        set d_ef_u=$d_ef_b
+        set d_vr_u=$d_vr_b
     else
-        set deck_efi_uuid=
-        set deck_var_uuid=
+        set d_ef_u=
+        set d_vr_u=
     fi
 
-    if [ x$deck_rootfs_uuid != x ]; then
-        set deck_root_arg="root=PARTUUID=$deck_rootfs_uuid"
+    d_dbg "DeckSB: map A rootfs=$d_ra_u efi=$d_ef_a var=$d_vr_a"
+    d_dbg "DeckSB: map B rootfs=$d_rb_u efi=$d_ef_b var=$d_vr_b"
+    d_dbg "DeckSB: map shared home=$d_hm esp=$d_ep"
+    d_dbg "DeckSB: chosen slot=$d_lbl efi=$d_ef_u var=$d_vr_u home=$d_hm esp=$d_ep"
+
+    if [ x$d_rf_u != x ]; then
+        set d_ar_r="root=PARTUUID=$d_rf_u"
     else
-        set deck_root_arg=
+        set d_ar_r=
     fi
-    if [ x$deck_efi_uuid != x ]; then
-        set deck_efi_arg="rd.steamos.efi=PARTUUID=$deck_efi_uuid"
+    if [ x$d_ef_u != x ]; then
+        set d_ar_e="rd.steamos.efi=PARTUUID=$d_ef_u"
     else
-        set deck_efi_arg=
+        set d_ar_e=
     fi
-    if [ x$deck_var_uuid != x ]; then
-        set deck_var_arg="rd.steamos.var=PARTUUID=$deck_var_uuid"
+    if [ x$d_vr_u != x ]; then
+        set d_ar_v="rd.steamos.var=PARTUUID=$d_vr_u"
     else
-        set deck_var_arg=
+        set d_ar_v=
     fi
-    if [ x$deck_partset_home != x ]; then
-        set deck_home_arg="rd.steamos.home=PARTUUID=$deck_partset_home"
+    if [ x$d_hm != x ]; then
+        set d_ar_h="rd.steamos.home=PARTUUID=$d_hm"
     else
-        set deck_home_arg=
+        set d_ar_h=
     fi
-    if [ x$deck_partset_esp != x ]; then
-        set deck_esp_arg="rd.steamos.esp=PARTUUID=$deck_partset_esp"
+    if [ x$d_ep != x ]; then
+        set d_ar_s="rd.steamos.esp=PARTUUID=$d_ep"
     else
-        set deck_esp_arg=
+        set d_ar_s=
     fi
 
-    if [ x$deck_root_arg != x ]; then
-        echo "DeckSB: root arg $deck_root_arg"
+    if [ x$d_ar_r != x ]; then
+        d_dbg "DeckSB: root arg $d_ar_r"
     else
-        echo "DeckSB: root arg missing"
+        d_dbg "DeckSB: root arg missing"
     fi
-    if [ x$deck_efi_arg != x ]; then
-        echo "DeckSB: efi arg $deck_efi_arg"
+    if [ x$d_ar_e != x ]; then
+        d_dbg "DeckSB: efi arg $d_ar_e"
     else
-        echo "DeckSB: efi arg missing"
+        d_dbg "DeckSB: efi arg missing"
     fi
-    if [ x$deck_var_arg != x ]; then
-        echo "DeckSB: var arg $deck_var_arg"
+    if [ x$d_ar_v != x ]; then
+        d_dbg "DeckSB: var arg $d_ar_v"
     else
-        echo "DeckSB: var arg missing"
+        d_dbg "DeckSB: var arg missing"
     fi
-    if [ x$deck_home_arg != x ]; then
-        echo "DeckSB: home arg $deck_home_arg"
+    if [ x$d_ar_h != x ]; then
+        d_dbg "DeckSB: home arg $d_ar_h"
     else
-        echo "DeckSB: home arg missing"
+        d_dbg "DeckSB: home arg missing"
     fi
-    if [ x$deck_esp_arg != x ]; then
-        echo "DeckSB: esp arg $deck_esp_arg"
+    if [ x$d_ar_s != x ]; then
+        d_dbg "DeckSB: esp arg $d_ar_s"
     else
-        echo "DeckSB: esp arg missing"
-    fi
-
-    if [ x$deck_rootfs_label = xA ]; then
-        set deck_rootfs_fsuuid=$deck_rootfs_a_fsuuid
-    elif [ x$deck_rootfs_label = xB ]; then
-        set deck_rootfs_fsuuid=$deck_rootfs_b_fsuuid
-    else
-        set deck_rootfs_fsuuid=
+        d_dbg "DeckSB: esp arg missing"
     fi
 
-    if [ x$deck_rootfs_fsuuid != x ]; then
-        search --no-floppy --fs-uuid --set=root $deck_rootfs_fsuuid
+    if [ x$d_rf_u != x ]; then
+        d_rr $d_rf_u root
         if [ x$root != x ]; then
-            echo "DeckSB: root set via fs-uuid $deck_rootfs_fsuuid"
-            set deck_rootfs_ready=1
+            d_dbg "DeckSB: root set via partuuid $d_rf_u ($root)"
+            set d_rdy=1
         else
-            echo "DeckSB: unable to find fs-uuid $deck_rootfs_fsuuid"
+            echo "DeckSB: unable to resolve partuuid $d_rf_u"
         fi
     else
-        echo "DeckSB: missing fs-uuid mapping for $deck_rootfs_label"
+        echo "DeckSB: missing rootfs partuuid for $d_lbl"
     fi
 }
 
-menuentry 'SteamOS SB (shimless)' {
-    # IMPORTANT: do NOT reset gfxpayload or terminal here.
-    # We want to keep the hi-res framebuffer and gfxterm.
-    
-    background_image $cmdpath/boot.png
+
+menuentry 'SteamOS SB (auto)' {
+    set d_fsl=
+    if [ x$d_gdbg = x1 ]; then
+        echo "DeckSB: dev grub verbose mode enabled"
+        set pager=0
+        set d_kv="loglevel=5"
+    else
+        # Keep release boots visually quiet.
+        set pager=1
+        set d_kv="loglevel=3 quiet splash"
+        background_image $cmdpath/boot.png
+    fi
     
     # Force a repaint to the framebuffer
 
     insmod part_gpt
-    insmod search_fs_uuid
     insmod fat
     insmod btrfs
     insmod gzio
+    set d_bn=1
+    d_res_rf go
+__DECK_SB_KERNEL_BLOCK__
+}
+
+menuentry 'Steam SB (A)' {
+    set d_fsl=A
+    if [ x$d_gdbg = x1 ]; then
+        echo "DeckSB: dev grub verbose mode enabled"
+        set pager=0
+        set d_kv="loglevel=5"
+    else
+        set pager=1
+        set d_kv="loglevel=3 quiet splash"
+        background_image $cmdpath/boot.png
+    fi
+
+    insmod part_gpt
+    insmod fat
+    insmod btrfs
+    insmod gzio
+    set d_bn=1
+    d_res_rf go
+__DECK_SB_KERNEL_BLOCK__
+}
+
+menuentry 'Steam SB (B)' {
+    set d_fsl=B
+    if [ x$d_gdbg = x1 ]; then
+        echo "DeckSB: dev grub verbose mode enabled"
+        set pager=0
+        set d_kv="loglevel=5"
+    else
+        set pager=1
+        set d_kv="loglevel=3 quiet splash"
+        background_image $cmdpath/boot.png
+    fi
+
+    insmod part_gpt
+    insmod fat
+    insmod btrfs
+    insmod gzio
+    set d_bn=1
+    d_res_rf go
 __DECK_SB_KERNEL_BLOCK__
 }
 
@@ -352,7 +727,7 @@ set deck_iso_file='/usr/local/share/deck-sb/arch/boot/x86_64/vmlinuz-linux'
 set deck_iso_uuid=''
 set deck_iso_devpath=''
 if search --file $deck_iso_file --set=deck_iso_probe; then
-    menuentry 'Deck Secure Boot Tools (On Disk)' {
+    menuentry 'DeckSB Tools (On Disk)' {
         set gfxpayload=text
         terminal_output console
         insmod part_gpt
@@ -371,31 +746,33 @@ if search --file $deck_iso_file --set=deck_iso_probe; then
             fi
         fi
         if [ -n "$deck_iso_uuid" ]; then
-            echo 'Deck SB on-disk debug:'
-            echo "  device: $deck_iso"
-            echo "  uuid:   $deck_iso_uuid"
-            set deck_iso_kernel="/usr/local/share/deck-sb/arch/boot/x86_64/vmlinuz-linux"
-            set deck_iso_initrd="/usr/local/share/deck-sb/arch/boot/x86_64/initramfs-linux.img"
-            set deck_iso_sfs="/usr/local/share/deck-sb/arch/x86_64/airootfs.sfs"
-            if [ -f "($deck_iso)$deck_iso_kernel" ]; then
-                echo "  kernel: ($deck_iso)$deck_iso_kernel [OK]"
-            else
-                echo "  kernel: ($deck_iso)$deck_iso_kernel [MISSING]"
+            if [ x$d_gdbg = x1 ]; then
+                echo 'Deck SB on-disk debug:'
+                echo "  device: $deck_iso"
+                echo "  uuid:   $deck_iso_uuid"
+                set deck_iso_kernel="/usr/local/share/deck-sb/arch/boot/x86_64/vmlinuz-linux"
+                set deck_iso_initrd="/usr/local/share/deck-sb/arch/boot/x86_64/initramfs-linux.img"
+                set deck_iso_sfs="/usr/local/share/deck-sb/arch/x86_64/airootfs.sfs"
+                if [ -f "($deck_iso)$deck_iso_kernel" ]; then
+                    echo "  kernel: ($deck_iso)$deck_iso_kernel [OK]"
+                else
+                    echo "  kernel: ($deck_iso)$deck_iso_kernel [MISSING]"
+                fi
+                if [ -f "($deck_iso)$deck_iso_initrd" ]; then
+                    echo "  initrd: ($deck_iso)$deck_iso_initrd [OK]"
+                else
+                    echo "  initrd: ($deck_iso)$deck_iso_initrd [MISSING]"
+                fi
+                echo "  archisobasedir=usr/local/share/deck-sb/arch"
+                echo "  archisodevice=$deck_iso_devpath"
+                echo "  img_dev=$deck_iso_devpath"
+                if [ -f "($deck_iso)$deck_iso_sfs" ]; then
+                    echo "  img_loop: ($deck_iso)$deck_iso_sfs [OK]"
+                else
+                    echo "  img_loop: ($deck_iso)$deck_iso_sfs [MISSING]"
+                fi
+                sleep 3
             fi
-            if [ -f "($deck_iso)$deck_iso_initrd" ]; then
-                echo "  initrd: ($deck_iso)$deck_iso_initrd [OK]"
-            else
-                echo "  initrd: ($deck_iso)$deck_iso_initrd [MISSING]"
-            fi
-            echo "  archisobasedir=usr/local/share/deck-sb/arch"
-            echo "  archisodevice=$deck_iso_devpath"
-            echo "  img_dev=$deck_iso_devpath"
-            if [ -f "($deck_iso)$deck_iso_sfs" ]; then
-                echo "  img_loop: ($deck_iso)$deck_iso_sfs [OK]"
-            else
-                echo "  img_loop: ($deck_iso)$deck_iso_sfs [MISSING]"
-            fi
-            sleep 3
             linux ($deck_iso)/usr/local/share/deck-sb/arch/boot/x86_64/vmlinuz-linux archisobasedir=usr/local/share/deck-sb/arch archisodevice=$deck_iso_devpath img_dev=$deck_iso_devpath img_loop=/usr/local/share/deck-sb/arch/x86_64/airootfs.sfs copytoram=n
             initrd ($deck_iso)/usr/local/share/deck-sb/arch/boot/x86_64/initramfs-linux.img
         else

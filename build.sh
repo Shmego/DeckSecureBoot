@@ -7,7 +7,12 @@ set -euo pipefail
 # ---------------------------------------------------------------------------
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
-DECK_SB_VERSION="Beta 1.9"
+DECK_SB_VERSION="${DECK_SB_VERSION:-2.0}"
+DECK_SB_DEBUG="${DECK_SB_DEBUG:-0}"
+case "${DECK_SB_DEBUG,,}" in
+  1|true|yes|on) DECK_SB_DEBUG=1 ;;
+  *) DECK_SB_DEBUG=0 ;;
+esac
 ARCH_MIRROR_DATE="2025/12/21"
 WORKDIR=${WORKDIR:-/root/archlive}
 PROFILENAME=${PROFILENAME:-steamdeck-sb}
@@ -50,6 +55,8 @@ echo "[+] profile dir : $PROFILE_DIR"
 echo "[+] payload dir : $PAYLOAD_DIR"
 echo "[+] keys dir    : $KEYS_DIR"
 echo "[+] version     : $DECK_SB_VERSION"
+echo "[+] debug mode  : $( [ "$DECK_SB_DEBUG" -eq 1 ] && echo "enabled" || echo "disabled" )"
+echo "[+] grub mode   : $( [ "$DECK_SB_DEBUG" -eq 1 ] && echo "dev-verbose" || echo "release-quiet" )"
 echo "[+] mirror date : $ARCH_MIRROR_DATE (archive.archlinux.org)"
 
 for dir in "$PROFILE_DIR" "$PAYLOAD_DIR" "$KEYS_DIR"; do
@@ -69,30 +76,34 @@ done
 # ---------------------------------------------------------------------------
 # 2) install host deps if missing
 # ---------------------------------------------------------------------------
-ensure_pkg() {
-  local pkg="$1"
-  pacman -Sy --noconfirm
-  if ! pacman -Qi "$pkg" >/dev/null 2>&1; then
-    pacman -Sy --noconfirm "$pkg"
-  fi
-}
-
-refresh_keyring() {
+ensure_keyring() {
   if ! command -v pacman-key >/dev/null 2>&1; then
     return 0
   fi
-  if [ ! -d /etc/pacman.d/gnupg ] || [ ! -f /etc/pacman.d/gnupg/pubring.gpg ]; then
+  if [ ! -d /etc/pacman.d/gnupg ] || [ -z "$(pacman-key --list-keys 2>/dev/null || true)" ]; then
     pacman-key --init
     pacman-key --populate archlinux
   fi
-  pacman -Sy --noconfirm archlinux-keyring
 }
 
-refresh_keyring
-ensure_pkg archiso
-ensure_pkg grub
-ensure_pkg sbctl
-ensure_pkg sbsigntools
+install_host_deps() {
+  local missing=() pkg
+  for pkg in "$@"; do
+    if ! pacman -Qi "$pkg" >/dev/null 2>&1; then
+      missing+=("$pkg")
+    fi
+  done
+
+  if [ "${#missing[@]}" -eq 0 ]; then
+    return 0
+  fi
+
+  echo "[+] installing missing host dependencies: ${missing[*]}"
+  ensure_keyring
+  pacman -Syu --needed --noconfirm "${missing[@]}"
+}
+
+install_host_deps archiso grub sbctl sbsigntools
 
 # ---------------------------------------------------------------------------
 # 4) prepare working profile
@@ -165,6 +176,8 @@ version_escaped=${DECK_SB_VERSION//\\/\\\\}
 version_escaped=${version_escaped//&/\\&}
 version_escaped=${version_escaped//|/\\|}
 sed -i "s|__DECK_SB_VERSION__|$version_escaped|g" airootfs/root/deck-env.sh
+sed -i "s|__DECK_SB_DEBUG__|$DECK_SB_DEBUG|g" airootfs/root/deck-env.sh
+sed -i "s|__DECK_SB_DEBUG__|$DECK_SB_DEBUG|g" airootfs/root/deck-sb-files/deck-sb.cfg.tmpl
 
 chmod +x \
   airootfs/root/menu.sh \

@@ -5,7 +5,6 @@ set -euo pipefail
 . /root/deck-env.sh
 
 KEYDIR="${DECK_SB_KEYDIR}"
-PENDING_FLAG="${DECK_SB_PENDING_FLAG}"
 GUID_FILE="/var/lib/sbctl/GUID"
 
 clean_sbctl_output() {
@@ -25,15 +24,11 @@ exit_if_not_setup_mode() {
 
 exit_if_not_setup_mode
 
-for f in PK.key PK.pem KEK.key KEK.pem db.key db.pem; do
-  if [ ! -f "$KEYDIR/$f" ]; then
-    sb_error "Missing key file: $KEYDIR/$f"
-    exit 1
-  fi
-done
+if ! sb_require_key_files "$KEYDIR" PK.key PK.pem KEK.key KEK.pem db.key db.pem; then
+  exit 1
+fi
 
-if [ ! -d /sys/firmware/efi/efivars ]; then
-  sb_error "UEFI/efivars not present"
+if ! sb_require_efivars; then
   exit 1
 fi
 
@@ -47,7 +42,7 @@ cp "$KEYDIR/KEK.pem" /var/lib/sbctl/keys/KEK/KEK.pem
 cp "$KEYDIR/db.key"  /var/lib/sbctl/keys/db/db.key
 cp "$KEYDIR/db.pem"  /var/lib/sbctl/keys/db/db.pem
 
-chattr -i /sys/firmware/efi/efivars/{PK,KEK,db}* 2>/dev/null || true
+sb_unlock_efi_vars
 
 if [ ! -s "$GUID_FILE" ]; then
   sb_error "sbctl GUID file missing at $GUID_FILE"
@@ -62,10 +57,9 @@ fi
 
 cleaned=$(clean_sbctl_output "$ENROLL_RAW")
 
-mkdir -p "$(dirname "$PENDING_FLAG")"
-echo enable > "$PENDING_FLAG"
+sb_pending_mark enable
 
 sb_report "Keys enrolled: Deck SB + Microsoft" "$(printf '%s\n\n%s\n\n%s' \
   "$cleaned" \
-  "Next Step: Select 'Install Deck SB Jump Loader' from the menu to install the signed Deck SB EFI and boot menu entries. (Required for SteamOS to boot under Secure Boot.)" \
+  "Next Step: Select 'Install Deck SB EFI' from the menu to install the signed Deck SB EFI and boot menu entries. (Required for SteamOS to boot under Secure Boot.)" \
   "Reminder: Unsigned EFIs (including Clover) will NOT boot under Secure Boot until you sign them. Use the 'Signing Utility' from the menu to sign additional EFIs.")"

@@ -7,9 +7,9 @@ set -euo pipefail
 FIND_TIMEOUT=${FIND_TIMEOUT:-15}
 TIMEOUT_BIN=$(command -v timeout || true)
 
-ISO_MOUNT="/run/archiso/bootmnt"
-TMP_EFI_MOUNT_BASE="/run/deck-efi"
-TMP_LINUX_MOUNT_BASE="/run/deck-root"
+ISO_MOUNT="${DECK_SB_ISO_MOUNT}"
+TMP_EFI_MOUNT_BASE="${DECK_SB_TMP_EFI_MOUNT_BASE}"
+TMP_LINUX_MOUNT_BASE="${DECK_SB_TMP_LINUX_MOUNT_BASE}"
 mkdir -p "$TMP_EFI_MOUNT_BASE" "$TMP_LINUX_MOUNT_BASE"
 CLOVER_BUNDLE_KEY="__CLOVER_BUNDLE__"
 
@@ -36,26 +36,12 @@ progress_msg() {
   sb_progress "$msg" 5 70
 }
 
-display_path() {
-  format_display_path "$1" "$TMP_EFI_MOUNT_BASE" "$TMP_LINUX_MOUNT_BASE"
-}
-
 progress_msg "Scanning disks for EFI files and kernels..."
 declare -A ISO_SKIP_MAP=()
 collect_iso_device_skip_map "ISO_SKIP_MAP"
 collect_device_search_dirs "SEARCH_DIRS" "ADDED_DIRS" "TEMP_MOUNTS" "$ISO_MOUNT" "$TMP_EFI_MOUNT_BASE" "$TMP_LINUX_MOUNT_BASE" progress_msg "ISO_SKIP_MAP"
 
 ALL=()
-
-show_dialog_msg() {
-  local heading="$1" body="$2" height="${3:-15}" width="${4:-90}"
-  [ -n "$body" ] || body="(no sbctl output)"
-  deck_dialog --msgbox "$(printf '%s\n\n%s' "$heading" "$body")" "$height" "$width"
-}
-
-ensure_rw() {
-  ensure_rw_for_path "$@"
-}
 
 for dir in "${SEARCH_DIRS[@]}"; do
   while IFS= read -r -d '' f; do
@@ -91,8 +77,8 @@ sign_clover_bundle() {
 
   local file display
   for file in "${files[@]}"; do
-    display=$(display_path "$file")
-    if ! ERR=$(ensure_rw "$file"); then
+    display=$(deck_display_path "$file")
+    if ! ERR=$(ensure_rw_for_path "$file"); then
       deck_dialog --msgbox "${ERR:-Unable to access $display.}" 9 70
       return 1
     fi
@@ -101,21 +87,23 @@ sign_clover_bundle() {
   local summary=""
   local success=0 already=0 failed=0
   for file in "${files[@]}"; do
-    display=$(display_path "$file")
+    display=$(deck_display_path "$file")
     deck_dialog --infobox "Signing Clover EFI:\n$display" 6 70
-    sbctl_sign_capture "$file"
-    STATUS=$SBCTL_STATUS
-    OUTPUT=$(printf '%s' "$SBCTL_RAW_OUTPUT" | sanitize_printable)
-    if [ $STATUS -eq 0 ]; then
-      summary+="$display: signed\n"
-      success=$((success + 1))
-    elif printf '%s' "$OUTPUT" | grep -qi 'already been signed'; then
-      summary+="$display: already signed\n"
-      already=$((already + 1))
-    else
-      summary+="$display: FAILED (exit $STATUS)\n$OUTPUT\n\n"
-      failed=$((failed + 1))
-    fi
+    sbctl_sign_analyze "$file"
+    case "$SBCTL_RESULT" in
+      signed)
+        summary+="$display: signed\n"
+        success=$((success + 1))
+        ;;
+      already)
+        summary+="$display: already signed\n"
+        already=$((already + 1))
+        ;;
+      *)
+        summary+="$display: FAILED (exit $SBCTL_STATUS)\n$SBCTL_CLEAN_OUTPUT\n\n"
+        failed=$((failed + 1))
+        ;;
+    esac
   done
 
   summary=$(printf '%s' "$summary" | sanitize_printable)
@@ -210,7 +198,7 @@ while true; do
 
   for c in "${NON_CLOVER_ORDERED[@]}"; do
     KIND=$(guess_kind "$c")
-    DISPLAY_PATH=$(display_path "$c")
+    DISPLAY_PATH=$(deck_display_path "$c")
     MENU+=("$i" "$KIND :: $DISPLAY_PATH")
     PICK_TARGETS+=("$c")
     i=$((i+1))
@@ -233,7 +221,7 @@ while true; do
 
   TARGET="$TARGET_KEY"
 
-  if ! ERR=$(ensure_rw "$TARGET"); then
+  if ! ERR=$(ensure_rw_for_path "$TARGET"); then
     deck_dialog --msgbox "${ERR:-Unable to access target.}" 8 70
     continue
   fi
@@ -244,21 +232,18 @@ while true; do
   fi
 
   deck_dialog --infobox "Signing:\n$TARGET" 6 70
-  sbctl_sign_capture "$TARGET"
-  STATUS=$SBCTL_STATUS
-  OUTPUT=$(printf '%s' "$SBCTL_RAW_OUTPUT" | sanitize_printable)
-
-  if [ $STATUS -eq 0 ]; then
-    deck_message_box "Signing succeeded" "$OUTPUT"
-    continue
-  fi
-
-  if printf '%s' "$OUTPUT" | grep -qi 'already been signed'; then
-    deck_message_box "Already signed" "$OUTPUT"
-    continue
-  fi
-
-  deck_message_box "Signing failed (exit $STATUS)" "$OUTPUT"
+  sbctl_sign_analyze "$TARGET"
+  case "$SBCTL_RESULT" in
+    signed)
+      deck_message_box "Signing succeeded" "$SBCTL_CLEAN_OUTPUT"
+      ;;
+    already)
+      deck_message_box "Already signed" "$SBCTL_CLEAN_OUTPUT"
+      ;;
+    *)
+      deck_message_box "Signing failed (exit $SBCTL_STATUS)" "$SBCTL_CLEAN_OUTPUT"
+      ;;
+  esac
 done
 
 exit 0

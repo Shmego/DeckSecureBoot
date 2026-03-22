@@ -4,6 +4,7 @@ set -euo pipefail
 # shellcheck disable=SC1091
 . /root/deck-env.sh
 
+EMPTY=""
 BACKTITLE="${DECK_SB_BACKTITLE}"
 ISO_RELATIVE_PATH="/usr/local/share/deck-sb"
 ISO_VOLUME_LABEL="${DECK_SB_ISO_LABEL:-DECK_SB}"
@@ -15,8 +16,47 @@ ISO_DEBUG_LOG="$DECK_SB_DEBUG_LOG"
 
 copy_iso_payload() {
   local rootmp="$1"
+  local share_dir="$rootmp/usr/local/share"
   local dest="$rootmp$ISO_RELATIVE_PATH"
-  mkdir -p "$dest"
+  local write_probe=""
+  local ERR=""
+
+  log_debug "copy_iso_payload: rootmp=$rootmp share_dir=$share_dir dest=$dest"
+  log_debug "copy_iso_payload: root mount src=$(findmnt -rno SOURCE -T "$rootmp" 2>/dev/null || true) fstype=$(findmnt -rno FSTYPE -T "$rootmp" 2>/dev/null || true) opts=$(findmnt -rno OPTIONS -T "$rootmp" 2>/dev/null || true)"
+
+  if [ ! -d "$share_dir" ]; then
+    sb_error "Detected SteamOS root is missing /usr/local/share at $(format_display_path "$share_dir").\nAborting ISO install to disk."
+    return 1
+  fi
+
+  if ! ERR=$(ensure_rw_for_path "$share_dir"); then
+    sb_error "Filesystem containing $(format_display_path "$share_dir") is read-only.\nRemount it writable and retry.\n\n${ERR:-No remount details returned.}"
+    return 1
+  fi
+
+  if [ ! -d "$dest" ]; then
+    if ! mkdir -p "$dest"; then
+      sb_error "Failed to create $(format_display_path "$dest").\nCheck write permissions on $(format_display_path "$share_dir")."
+      return 1
+    fi
+  fi
+
+  write_probe="$dest/.deck-sb-write-test.$$"
+  if ! : > "$write_probe" 2>/dev/null; then
+    # One more forced write-enable attempt before failing.
+    log_debug "copy_iso_payload: initial write probe failed at $dest; retrying prepare_steamos_root_for_write"
+    if ! ERR=$(prepare_steamos_root_for_write "$rootmp"); then
+      log_debug "copy_iso_payload: prepare_steamos_root_for_write failed: ${ERR:-none}"
+    fi
+    if ! ERR=$(ensure_rw_for_path "$share_dir"); then
+      log_debug "copy_iso_payload: ensure_rw_for_path retry failed: ${ERR:-none}"
+    fi
+    if ! : > "$write_probe" 2>/dev/null; then
+      sb_error "Cannot write to $(format_display_path "$dest").\nThe target filesystem still appears read-only."
+      return 1
+    fi
+  fi
+  rm -f "$write_probe" 2>/dev/null || true
 
   local avail
   avail=$(df -m --output=avail "$dest" | tail -n1 | tr -d ' ')
@@ -30,10 +70,12 @@ copy_iso_payload() {
   local squash_src
   local mounted_iso=""
 
+  log_debug "copy_iso_payload: starting source discovery"
   mounted_iso=$(mount_live_iso_device 2>/dev/null || true)
   if [ -n "$mounted_iso" ] && [ -d "$mounted_iso" ]; then
     DECK_SB_ISO_ROOT="$mounted_iso"
     log_debug "copy_iso_payload: mounted_iso=$mounted_iso"
+    log_debug "copy_iso_payload: mounted_iso src=$(findmnt -rno SOURCE -T "$mounted_iso" 2>/dev/null || true) fstype=$(findmnt -rno FSTYPE -T "$mounted_iso" 2>/dev/null || true)"
   fi
   kernel_src=$(find_kernel_source 2>/dev/null || true)
   initrd_src=$(find_initrd_source 2>/dev/null || true)
@@ -86,7 +128,7 @@ copy_iso_payload() {
   rm -f "$fifo"
 
   cat <<'README' > "$dest/README.txt"
-Deck Secure Boot Tools
+DeckSB Tools (On Disk)
 ======================
 These files enable booting the Secure Boot ISO directly from disk.
 Remove /usr/local/share/deck-sb to reclaim space once no longer needed.
@@ -108,12 +150,13 @@ main() {
 
   trap cleanup_temp_iso_mount EXIT
 
-  local root_override="${1:-}" realroot
+  local root_override="${1:-}" realroot ERR
   if [ -n "$root_override" ]; then
     realroot="$root_override"
   else
     realroot=$(find_steamos_root 2>/dev/null || true)
   fi
+  log_debug "main: root_override=${root_override:-none} realroot=${realroot:-none}"
 
   if [ -z "$realroot" ]; then
     sb_error "Could not detect a SteamOS root partition. Mount it manually and retry."
@@ -122,7 +165,19 @@ main() {
 
   local pretty_root
   pretty_root=$(format_display_path "$realroot")
+  log_debug "main: pretty_root=$pretty_root"
+  log_debug "main: realroot src=$(findmnt -rno SOURCE -T "$realroot" 2>/dev/null || true) fstype=$(findmnt -rno FSTYPE -T "$realroot" 2>/dev/null || true) opts=$(findmnt -rno OPTIONS -T "$realroot" 2>/dev/null || true)"
   sb_info "SteamOS root detected at $pretty_root."
+
+  if command -v udevadm >/dev/null 2>&1; then
+    log_debug "main: waiting for udev settle before remount"
+    udevadm settle >/dev/null 2>&1 || true
+  fi
+  local settle_delay=4
+  if [ -n "$settle_delay" ] && [ "$settle_delay" -gt 0 ] 2>/dev/null; then
+    log_debug "main: sleeping ${settle_delay}s before remount"
+    sleep "$settle_delay"
+  fi
 
   if [ -d "$realroot$ISO_RELATIVE_PATH" ]; then
     if ! deck_dialog --backtitle "$BACKTITLE" --yesno "Existing files found in $ISO_RELATIVE_PATH. Overwrite them?" 10 70; then
@@ -130,11 +185,16 @@ main() {
     fi
   fi
 
-  if ! prepare_steamos_root_for_write "$realroot"; then
-    sb_error "Unable to remount $pretty_root writable."
+  if ! ERR=$(prepare_steamos_root_for_write "$realroot"); then
+    sb_error "SteamOS root was detected at $pretty_root, but it was still not writable after the remount attempt.\nPlease retry the install.\n\n${ERR:-No remount details returned.}"
+    exit 1
+  fi
+  if ! ERR=$(ensure_rw_for_path "$realroot"); then
+    sb_error "Detected SteamOS root $pretty_root is still read-only after remount attempt.\n\n${ERR:-No remount details returned.}"
     exit 1
   fi
 
+  log_debug "main: invoking copy_iso_payload for $realroot"
   if copy_iso_payload "$realroot"; then
     sb_info "Secure Boot ISO files are ready under $(format_display_path "$realroot$ISO_RELATIVE_PATH")."
   else

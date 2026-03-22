@@ -4,11 +4,12 @@ set -euo pipefail
 # set FORCE_REBUILD=1 ./makeefi.sh to force a clean rebuild
 FORCE_REBUILD="${FORCE_REBUILD:-0}"
 
-KEY_DIR="keys"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
+KEY_DIR="${SCRIPT_DIR}/keys"
 PK_KEY="${KEY_DIR}/PK.key"
 PK_CRT="${KEY_DIR}/PK.pem"
 
-OUT_DIR="dist"
+OUT_DIR="${SCRIPT_DIR}/dist"
 OUT_EFI="${OUT_DIR}/steamos-jump.signed.efi"
 
 # pin to the working grub
@@ -18,28 +19,62 @@ BUILD_ROOT="$(pwd)/build-grub"
 GRUB_SRC="${BUILD_ROOT}/grub"
 GRUB_PREFIX="${BUILD_ROOT}/out"
 GRUB_MK="${GRUB_PREFIX}/bin/grub-mkstandalone"
+DECKSB_GRUB_CMD_SRC="${SCRIPT_DIR}/grub-decksb-conf.c"
+DECKSB_GRUB_CMD_DST_REL="grub-core/commands/decksb_conf.c"
+DECKSB_GRUB_CMD_DST="${GRUB_SRC}/${DECKSB_GRUB_CMD_DST_REL}"
+DECKSB_GRUB_MOD="${GRUB_PREFIX}/lib/grub/x86_64-efi/decksb_conf.mod"
+REBUILD_GRUB=0
 
-install_build_deps() {
-  pacman -Sy
-  pacman -S --needed --noconfirm \
-    git python \
-    autoconf automake pkgconf \
-    gettext texinfo help2man \
-    flex bison libtool patch \
-    make gcc \
-    sbsigntools
+check_missing_pkgs() {
+  local missing=() pkg
+  for pkg in "$@"; do
+    if ! pacman -Qi "$pkg" >/dev/null 2>&1; then
+      missing+=("$pkg")
+    fi
+  done
+  printf '%s\n' "${missing[@]}"
+}
+
+ensure_keyring() {
+  if ! command -v pacman-key >/dev/null 2>&1; then
+    return 0
+  fi
+  if [ ! -d /etc/pacman.d/gnupg ] || [ -z "$(pacman-key --list-keys 2>/dev/null || true)" ]; then
+    pacman-key --init
+    pacman-key --populate archlinux
+  fi
 }
 
 # --- preflight ---
 [[ -f "$PK_KEY" ]] || { echo "ERROR: $PK_KEY missing"; exit 1; }
 [[ -f "$PK_CRT" ]] || { echo "ERROR: $PK_CRT missing"; exit 1; }
 
-install_build_deps
+BUILD_DEPS=(
+  git python
+  autoconf automake pkgconf
+  gettext texinfo help2man
+  flex bison libtool patch
+  make gcc
+  sbsigntools
+)
+
+MISSING_BUILD_DEPS=()
+while IFS= read -r pkg; do
+  [ -n "$pkg" ] && MISSING_BUILD_DEPS+=("$pkg")
+done < <(check_missing_pkgs "${BUILD_DEPS[@]}")
+
+if [ "${#MISSING_BUILD_DEPS[@]}" -ne 0 ]; then
+  echo "[!] missing build dependencies: ${MISSING_BUILD_DEPS[*]}"
+  echo "[+] attempting package install..."
+  ensure_keyring
+  pacman -Syu --needed --noconfirm "${MISSING_BUILD_DEPS[@]}"
+fi
 mkdir -p "$OUT_DIR"
 
 if [[ "$FORCE_REBUILD" == "1" ]]; then
   echo "[*] FORCE_REBUILD=1 -> removing $BUILD_ROOT"
   rm -rf "$BUILD_ROOT"
+  REBUILD_GRUB=1
 fi
 mkdir -p "$BUILD_ROOT"
 
@@ -54,8 +89,38 @@ echo "[*] checking out GRUB commit $GRUB_COMMIT ..."
 git fetch origin
 git checkout --force "$GRUB_COMMIT"
 
+if [ -f "$DECKSB_GRUB_CMD_SRC" ]; then
+  if [ ! -f "$DECKSB_GRUB_CMD_DST" ] || ! cmp -s "$DECKSB_GRUB_CMD_SRC" "$DECKSB_GRUB_CMD_DST"; then
+    echo "[*] updating decksb_conf module source ..."
+    cp "$DECKSB_GRUB_CMD_SRC" "$DECKSB_GRUB_CMD_DST"
+    REBUILD_GRUB=1
+  else
+    echo "[*] decksb_conf module source unchanged"
+  fi
+  if ! grep -q "name = decksb_conf" "$GRUB_SRC/grub-core/Makefile.core.def"; then
+    cat >> "$GRUB_SRC/grub-core/Makefile.core.def" <<'EOF'
+
+module = {
+  name = decksb_conf;
+  common = commands/decksb_conf.c;
+};
+EOF
+    REBUILD_GRUB=1
+  fi
+fi
+
+if [ ! -f "$DECKSB_GRUB_MOD" ]; then
+  REBUILD_GRUB=1
+elif command -v strings >/dev/null 2>&1; then
+  # Ensure the already-built module exports our latest parser command.
+  if ! strings "$DECKSB_GRUB_MOD" | grep -q "d_ps_ok"; then
+    echo "[*] decksb_conf.mod is stale (missing d_ps_ok), rebuilding ..."
+    REBUILD_GRUB=1
+  fi
+fi
+
 # --- build grub if needed ---
-if [[ ! -x "$GRUB_MK" ]]; then
+if [[ ! -x "$GRUB_MK" || "$REBUILD_GRUB" == "1" ]]; then
   echo "[*] patching shim fallback ..."
   sed -i 's/return grub_error (GRUB_ERR_ACCESS_DENIED, N_("shim protocols not found"));/return GRUB_ERR_NONE;/' \
     grub-core/kern/efi/sb.c
@@ -67,6 +132,7 @@ if [[ ! -x "$GRUB_MK" ]]; then
   ./configure \
     --with-platform=efi \
     --target=x86_64 \
+    --disable-werror \
     --prefix="$GRUB_PREFIX"
 
   echo "[*] make ..."
@@ -123,10 +189,6 @@ if [ -n "$cmdpath" ]; then
             done
         fi
     fi
-
-    if [ "$deck_sb_cfg_loaded" = 1 ]; then
-        return
-    fi
 fi
 
 # 2) fallback: search lowercase
@@ -134,7 +196,7 @@ if [ "$deck_sb_cfg_loaded" = 0 ]; then
     search --file /efi/deck-sb/deck-sb.cfg --set=esp
     if [ -n "$esp" ]; then
         source ($esp)/efi/deck-sb/deck-sb.cfg
-        return
+        set deck_sb_cfg_loaded=1
     fi
 fi
 
@@ -143,7 +205,7 @@ if [ "$deck_sb_cfg_loaded" = 0 ]; then
     search --file /EFI/deck-sb/deck-sb.cfg --set=esp
     if [ -n "$esp" ]; then
         source ($esp)/EFI/deck-sb/deck-sb.cfg
-        return
+        set deck_sb_cfg_loaded=1
     fi
 fi
 
@@ -160,7 +222,7 @@ echo "[*] building standalone GRUB EFI ..."
 "$GRUB_MK" \
   -O x86_64-efi \
   -o "$EFI_RAW" \
-  --modules="part_gpt part_msdos fat ext2 search search_fs_file normal efi_gop efi_uga regexp gfxterm all_video" \
+  --modules="part_gpt part_msdos fat ext2 search search_fs_file normal efi_gop efi_uga regexp gfxterm all_video decksb_conf" \
   "boot/grub/unicode.pf2=$(pwd)/unicode.pf2" \
   "boot/grub/grub.cfg=${CFG_FILE}"
 
