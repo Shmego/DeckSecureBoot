@@ -380,26 +380,43 @@ sign_kernel_on_partuuid() {
 
   local kernel_path="$root_mount$STEAMOS_KERNEL_IMAGE"
   log_debug "sign: $label kernel path $kernel_path"
+  if [ ! -f "$kernel_path" ]; then
+    log_debug "sign: $label kernel missing at $kernel_path, scanning for actual neptune kernel"
+    if [ -d "$root_mount/boot" ]; then
+      log_debug "sign: $label /boot listing:"
+      while IFS= read -r line; do
+        log_debug "sign: $label /boot $line"
+      done < <(ls -la "$root_mount/boot" 2>/dev/null || true) || true
+    fi
+    local found_kernel found_initrd
+    found_kernel=$(find "$root_mount/boot" -maxdepth 1 -name 'vmlinuz-linux-neptune*' ! -name '*.img' -type f 2>/dev/null | sort | tail -1 || true)
+    if [ -n "$found_kernel" ]; then
+      local rel_kernel="${found_kernel#$root_mount}"
+      log_debug "sign: $label discovered actual kernel $rel_kernel"
+      kernel_path="$found_kernel"
+      STEAMOS_KERNEL_IMAGE="$rel_kernel"
+      # Also discover matching initrd images
+      local kver="${rel_kernel##*/vmlinuz-}"
+      found_initrd=""
+      local img
+      for img in "$root_mount/boot/amd-ucode.img" "$root_mount/boot/initramfs-${kver}.img"; do
+        [ -f "$img" ] && found_initrd+=" ${img#$root_mount}"
+      done
+      if [ -n "$found_initrd" ]; then
+        STEAMOS_INITRD_IMAGES="${found_initrd# }"
+        log_debug "sign: $label discovered initrd $STEAMOS_INITRD_IMAGES"
+      fi
+      DECK_SB_KERNEL_UPDATED=1
+    else
+      log_debug "sign: $label no neptune kernel found in $root_mount/boot"
+    fi
+  fi
   if [ -f "$kernel_path" ]; then
     log_debug "sign: $label signing $kernel_path"
     sb_run_capture "sbctl sign $label" sbctl sign -s "$kernel_path" >/dev/null || true
     log_debug "sign: $label signed $kernel_path"
   else
-    log_debug "sign: $label kernel missing $kernel_path"
-    if [ "${DECK_SB_DEBUG:-0}" -eq 1 ]; then
-      if [ -d "$root_mount/boot" ]; then
-        log_debug "sign: $label /boot listing:"
-        while IFS= read -r line; do
-          log_debug "sign: $label /boot $line"
-        done < <(ls -la "$root_mount/boot" 2>/dev/null || true) || true
-      else
-        log_debug "sign: $label /boot missing under rootfs"
-      fi
-      log_debug "sign: $label searching for vmlinuz* under rootfs"
-      while IFS= read -r line; do
-        log_debug "sign: $label found $line"
-      done < <(find "$root_mount" -maxdepth 3 -type f -name 'vmlinuz*' 2>/dev/null || true) || true
-    fi
+    log_debug "sign: $label kernel still missing after scan: $kernel_path"
   fi
 
   if [ "$root_mount" != "$top_mount" ]; then
@@ -491,6 +508,8 @@ sign_steamos_kernels_from_partsets() {
   fi
 
   deck_dialog --infobox "Signing SteamOS kernels (active slot first)..." 6 70
+  DECK_SB_KERNEL_UPDATED=0
+  local kernel_before="$STEAMOS_KERNEL_IMAGE"
   local slot partuuid sign_fail=0
   for slot in "${order[@]}"; do
     if [ "$slot" = "A" ]; then
@@ -504,6 +523,21 @@ sign_steamos_kernels_from_partsets() {
       sign_fail=1
     fi
   done
+
+  # If signing discovered the real kernel path, rewrite deck-sb.cfg
+  if [ "${DECK_SB_KERNEL_UPDATED:-0}" -eq 1 ] && [ "$STEAMOS_KERNEL_IMAGE" != "$kernel_before" ]; then
+    local cfg_dir="$custom_dir"
+    log_debug "sign: kernel path updated to $STEAMOS_KERNEL_IMAGE, rewriting deck-sb.cfg"
+    deck_dialog --infobox "Updating boot config with correct kernel path:\n$STEAMOS_KERNEL_IMAGE" 7 80
+    local grub_source_dev=""
+    if [ -n "${SELECTED_GRUB:-}" ]; then
+      grub_source_dev=$(findmnt -rno SOURCE -T "$SELECTED_GRUB" 2>/dev/null || true)
+      grub_source_dev=$(clean_source_path "$grub_source_dev")
+    fi
+    write_cfg_to_custom_dir "$cfg_dir" "${grub_source_dev:-}"
+    deck_dialog --msgbox "Boot config rewritten with kernel:\n$STEAMOS_KERNEL_IMAGE" 8 80
+  fi
+
   if [ "$sign_fail" -eq 1 ]; then
     deck_dialog --msgbox "SteamOS kernel signing attempt complete.\nSome slots failed to sign; check the debug log for details." 8 80
   else
@@ -1135,6 +1169,7 @@ declare -A ADDED_DIRS=() SEEN_BASE=() SEEN_GRUB=() SEEN_KERNELS=()
 SELECTED_BASE=""
 SELECTED_GRUB=""
 LAST_INSTALLED_JUMP=""
+DECK_SB_KERNEL_UPDATED=0
 
 trap cleanup EXIT
 if [ "${1:-}" = "--detect-installed" ]; then
